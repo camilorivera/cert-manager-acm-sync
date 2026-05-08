@@ -284,7 +284,7 @@ func TestReconcile_CertificateAnnotation_RegionFallback(t *testing.T) {
 
 	var calledRegion string
 	pool := &regionCapturingPool{
-		client: m,
+		client:  m,
 		capture: func(r string) { calledRegion = r },
 	}
 
