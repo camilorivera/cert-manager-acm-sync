@@ -1,7 +1,7 @@
 replicaCount: 2
 
 image:
-  repository: camilorivera/cert-manager-acm-sync
+  repository: ghcr.io/camilorivera/cert-manager-acm-sync
   pullPolicy: IfNotPresent
   # Defaults to Chart.appVersion when empty
   tag: ""

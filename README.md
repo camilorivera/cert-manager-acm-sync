@@ -259,7 +259,7 @@ docker compose run --rm \
 | Key | Default | Description |
 |---|---|---|
 | `replicaCount` | `2` | Replicas (leader election keeps only one active) |
-| `image.repository` | `camilorivera/cert-manager-acm-sync` | Docker image |
+| `image.repository` | `ghcr.io/camilorivera/cert-manager-acm-sync` | Container image |
 | `image.tag` | `""` | Defaults to the chart's `appVersion` |
 | `controller.defaultRegion` | `us-east-1` | Default AWS region |
 | `controller.leaderElect` | `true` | Enable leader election |
