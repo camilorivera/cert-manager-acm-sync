@@ -218,6 +218,66 @@ func TestReconcile_Renewal_ReimportsWithSameARN(t *testing.T) {
 	assert.Equal(t, arn, updated.Annotations[annotations.ARN], "ARN must not change on renewal")
 }
 
+// TestReconcile_Skip_BackfillsARNOntoCertificate verifies that when the
+// fingerprint is unchanged (skip path), the controller still mirrors the ARN
+// onto the owning Certificate if it is missing — covering the upgrade case
+// where certificates were synced before the Certificate write-back was added.
+func TestReconcile_Skip_BackfillsARNOntoCertificate(t *testing.T) {
+	certPEM, keyPEM := generateCert(t)
+	fp, err := fingerprint.Compute(certPEM)
+	require.NoError(t, err)
+	const arn = "arn:aws:acm:us-east-1:123:certificate/existing"
+
+	m := &acmclient.MockACMAPI{}
+	m.On("DescribeCertificate", mock.Anything, mock.Anything).
+		Return(&awsacm.DescribeCertificateOutput{
+			Certificate: &acmtypes.CertificateDetail{CertificateArn: aws.String(arn)},
+		}, nil)
+
+	sc := runtime.NewScheme()
+	_ = corev1.AddToScheme(sc)
+	fakeClient := fake.NewClientBuilder().WithScheme(sc).Build()
+	recorder := record.NewFakeRecorder(32)
+	r := &controller.SecretReconciler{
+		Client:        fakeClient,
+		Reader:        fakeClient,
+		Recorder:      recorder,
+		ACMPool:       &acmclient.MockPool{Client: m},
+		DefaultRegion: "us-east-1",
+	}
+
+	// Certificate exists but has no ARN annotation (pre-upgrade state).
+	certObj := &unstructured.Unstructured{}
+	certObj.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
+	certObj.SetName("my-cert")
+	certObj.SetNamespace("default")
+	require.NoError(t, fakeClient.Create(context.Background(), certObj))
+
+	// Secret is already fully synced (ARN + matching fingerprint).
+	secret := tlsSecret(map[string]string{
+		annotations.Enabled:     "true",
+		annotations.ARN:         arn,
+		annotations.Fingerprint: fp,
+	}, certPEM, keyPEM)
+	secret.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "cert-manager.io/v1",
+		Kind:       "Certificate",
+		Name:       "my-cert",
+	}}
+	require.NoError(t, fakeClient.Create(context.Background(), secret))
+
+	_, err = r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	m.AssertNotCalled(t, "ImportCertificate")
+
+	// Certificate must now have the ARN backfilled.
+	var updatedCert unstructured.Unstructured
+	updatedCert.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
+	require.NoError(t, fakeClient.Get(context.Background(),
+		k8stypes.NamespacedName{Name: "my-cert", Namespace: "default"}, &updatedCert))
+	assert.Equal(t, arn, updatedCert.GetAnnotations()[annotations.ARN])
+}
+
 // TestReconcile_SecretRecreated_RecoverARNFromCertificate verifies that when a
 // Secret is deleted and recreated by cert-manager (losing the acm.sync/arn
 // annotation), the controller recovers the ARN from the owning Certificate and

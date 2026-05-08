@@ -143,6 +143,21 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if existingARN != "" && existingFP == currentFP {
 		logger.V(1).Info("fingerprint unchanged, skipping import", "arn", existingARN)
 		metrics.SyncTotal.WithLabelValues(region, "skipped").Inc()
+		// Best-effort: mirror the ARN onto the Certificate owner if it is
+		// missing it (e.g. pre-existing certificates synced before this
+		// feature was introduced, or after a controller upgrade).
+		if certOwner != nil && certOwner.GetAnnotations()[annotations.ARN] == "" {
+			certPatch := certOwner.DeepCopy()
+			certAnns := certOwner.GetAnnotations()
+			if certAnns == nil {
+				certAnns = map[string]string{}
+			}
+			certAnns[annotations.ARN] = existingARN
+			certOwner.SetAnnotations(certAnns)
+			if err := r.Patch(ctx, certOwner, client.MergeFrom(certPatch)); err != nil {
+				logger.Error(err, "failed to backfill ARN annotation onto Certificate", "arn", existingARN)
+			}
+		}
 		return ctrl.Result{RequeueAfter: periodicRequeueInterval}, nil
 	}
 
