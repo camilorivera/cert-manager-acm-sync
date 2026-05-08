@@ -5,7 +5,7 @@ A Kubernetes controller that automatically syncs TLS certificates issued by [cer
 ## How it works
 
 1. cert-manager issues a TLS certificate and stores it as a `kubernetes.io/tls` Secret.
-2. You annotate the Secret (or the cert-manager `Certificate` resource's `secretTemplate`) with `acm.sync/enabled: "true"`.
+2. You annotate the cert-manager `Certificate` resource directly with `acm.sync/enabled: "true"` (or propagate it via `secretTemplate.annotations` — both are supported).
 3. The controller imports the certificate into ACM and writes the ARN back as `acm.sync/arn` on both the Secret and the owning `Certificate` resource.
 4. When cert-manager renews the certificate, the controller detects the fingerprint change and re-imports to the **same ARN** — ALBs, CloudFront, and API Gateway require no reconfiguration.
 5. If the Secret is deleted and recreated by cert-manager, the controller recovers the ARN from the owning `Certificate` annotation and reimports to the **same ARN** instead of creating a new certificate.
@@ -37,7 +37,7 @@ See [releases](https://github.com/camilorivera/cert-manager-acm-sync/releases) f
 
 ## Quick Start
 
-### With cert-manager Certificate resource
+### Annotate the Certificate resource (recommended)
 
 ```yaml
 apiVersion: cert-manager.io/v1
@@ -45,18 +45,19 @@ kind: Certificate
 metadata:
   name: my-service-tls
   namespace: default
+  annotations:
+    acm.sync/enabled: "true"
+    # acm.sync/region: "us-east-1"  # required for CloudFront
 spec:
   secretName: my-service-tls
-  secretTemplate:
-    annotations:
-      acm.sync/enabled: "true"
-      # acm.sync/region: "us-east-1"  # required for CloudFront
   dnsNames:
     - my-service.example.com
   issuerRef:
     name: letsencrypt-prod
     kind: ClusterIssuer
 ```
+
+Annotating the `Certificate` directly is preferred — the annotation stays on the resource that represents your intent, not on the Secret. The `secretTemplate.annotations` approach still works for backward compatibility.
 
 ### Via Helm values (creates the Certificate alongside the controller)
 

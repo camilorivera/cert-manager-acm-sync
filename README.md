@@ -18,7 +18,7 @@ cert-manager ──► kubernetes.io/tls Secret ──► cert-manager-acm-sync 
 ```
 
 1. cert-manager issues a TLS certificate and stores it as a `kubernetes.io/tls` Secret.
-2. You annotate the Secret (or the cert-manager `Certificate` resource's `secretTemplate`) with `acm.sync/enabled: "true"`.
+2. You annotate the cert-manager `Certificate` resource directly with `acm.sync/enabled: "true"` (or propagate it via `secretTemplate.annotations` — both are supported).
 3. The controller imports the certificate into ACM and writes the ARN back as `acm.sync/arn` on both the Secret and the owning `Certificate` resource.
 4. When cert-manager renews the certificate, the controller detects the fingerprint change and **re-imports to the same ARN** — no downstream reconfiguration needed.
 5. If the Secret is deleted and recreated by cert-manager, the controller recovers the ARN from the owning `Certificate` annotation and reimports to the **same ARN** instead of creating a new certificate.
@@ -95,12 +95,11 @@ kind: Certificate
 metadata:
   name: my-service-tls
   namespace: default
+  annotations:
+    acm.sync/enabled: "true"
+    # acm.sync/region: "us-east-1"  # uncomment for CloudFront
 spec:
   secretName: my-service-tls
-  secretTemplate:
-    annotations:
-      acm.sync/enabled: "true"
-      # acm.sync/region: "us-east-1"  # uncomment for CloudFront
   dnsNames:
     - my-service.example.com
   issuerRef:
@@ -108,7 +107,9 @@ spec:
     kind: ClusterIssuer
 ```
 
-**Option C — annotate an existing TLS Secret directly:**
+Annotating the `Certificate` directly is preferred — the annotation stays on the resource that represents your intent, not on the Secret (which is a data store). The `secretTemplate` approach still works for backward compatibility.
+
+**Option C — annotate an existing TLS Secret directly (no cert-manager required):**
 
 ```bash
 kubectl annotate secret my-tls acm.sync/enabled=true

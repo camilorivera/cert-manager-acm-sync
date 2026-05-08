@@ -12,12 +12,15 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	acmclient "github.com/camilorivera/cert-manager-acm-sync/internal/acm"
 	"github.com/camilorivera/cert-manager-acm-sync/internal/annotations"
@@ -64,6 +67,25 @@ func (r *SecretReconciler) findCertificateOwner(ctx context.Context, secret *cor
 	return nil
 }
 
+// certificateToSecret maps a cert-manager Certificate event to a reconcile
+// Request for the Secret it owns (via spec.secretName).
+func (r *SecretReconciler) certificateToSecret(_ context.Context, obj client.Object) []reconcile.Request {
+	cert, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return nil
+	}
+	secretName, found, err := unstructured.NestedString(cert.Object, "spec", "secretName")
+	if err != nil || !found || secretName == "" {
+		return nil
+	}
+	return []reconcile.Request{{
+		NamespacedName: k8stypes.NamespacedName{
+			Namespace: cert.GetNamespace(),
+			Name:      secretName,
+		},
+	}}
+}
+
 const (
 	periodicRequeueInterval = 6 * time.Hour
 )
@@ -79,8 +101,16 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	// Belt-and-suspenders: predicate should already filter these out
-	if secret.Type != corev1.SecretTypeTLS || !annotations.IsEnabled(secret.Annotations) {
+	// Look up the owning Certificate early — needed for both the enabled check
+	// and region fallback when the annotation lives on the Certificate rather
+	// than being propagated to the Secret via secretTemplate.
+	certOwner := r.findCertificateOwner(ctx, &secret)
+
+	// Belt-and-suspenders: the predicate passes all TLS Secrets; bail quickly
+	// if neither the Secret nor its Certificate owner has opted in.
+	enabled := annotations.IsEnabled(secret.Annotations) ||
+		(certOwner != nil && annotations.IsEnabled(certOwner.GetAnnotations()))
+	if secret.Type != corev1.SecretTypeTLS || !enabled {
 		return ctrl.Result{}, nil
 	}
 
@@ -101,6 +131,10 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	region := r.DefaultRegion
 	if override := annotations.GetRegion(secret.Annotations); override != "" {
 		region = override
+	} else if certOwner != nil {
+		if override := annotations.GetRegion(certOwner.GetAnnotations()); override != "" {
+			region = override
+		}
 	}
 
 	acmClient := r.ACMPool.ClientForRegion(region)
@@ -111,7 +145,6 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// If the Secret was deleted and recreated by cert-manager, it loses the
 	// ACM ARN annotation. Recover it from the owning Certificate resource so
 	// we reimport to the same ARN instead of creating a new certificate.
-	certOwner := r.findCertificateOwner(ctx, &secret)
 	if existingARN == "" && certOwner != nil {
 		if recovered := certOwner.GetAnnotations()[annotations.ARN]; recovered != "" {
 			logger.Info("recovered ARN from Certificate owner", "arn", recovered)
@@ -246,12 +279,28 @@ func (r *SecretReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Reader == nil {
 		r.Reader = mgr.GetAPIReader()
 	}
-	return ctrl.NewControllerManagedBy(mgr).
+
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Secret{},
 			builder.WithPredicates(TLSAnnotatedPredicate{}),
 		).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 5,
-		}).
-		Complete(r)
+		})
+
+	// Watch cert-manager Certificate resources so that adding acm.sync/enabled
+	// directly to a Certificate (instead of secretTemplate.annotations)
+	// triggers reconciliation of the owned Secret. Skipped gracefully if the
+	// cert-manager CRD is not installed.
+	if _, err := mgr.GetRESTMapper().RESTMapping(certGVK.GroupKind(), certGVK.Version); err == nil {
+		certObj := &unstructured.Unstructured{}
+		certObj.SetGroupVersionKind(certGVK)
+		b = b.Watches(
+			certObj,
+			handler.EnqueueRequestsFromMapFunc(r.certificateToSecret),
+			builder.WithPredicates(CertificateAnnotatedPredicate{}),
+		)
+	}
+
+	return b.Complete(r)
 }

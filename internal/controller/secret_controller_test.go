@@ -218,6 +218,120 @@ func TestReconcile_Renewal_ReimportsWithSameARN(t *testing.T) {
 	assert.Equal(t, arn, updated.Annotations[annotations.ARN], "ARN must not change on renewal")
 }
 
+// TestReconcile_CertificateAnnotation_EnablesSync verifies that acm.sync/enabled
+// on the Certificate resource (not propagated to the Secret via secretTemplate)
+// is sufficient to trigger an ACM import.
+func TestReconcile_CertificateAnnotation_EnablesSync(t *testing.T) {
+	certPEM, keyPEM := generateCert(t)
+	const arn = "arn:aws:acm:us-east-1:123:certificate/new"
+
+	m := &acmclient.MockACMAPI{}
+	m.On("ImportCertificate", mock.Anything, mock.MatchedBy(func(in *awsacm.ImportCertificateInput) bool {
+		return in.CertificateArn == nil
+	})).Return(&awsacm.ImportCertificateOutput{CertificateArn: aws.String(arn)}, nil)
+
+	sc := runtime.NewScheme()
+	_ = corev1.AddToScheme(sc)
+	fakeClient := fake.NewClientBuilder().WithScheme(sc).Build()
+	recorder := record.NewFakeRecorder(32)
+	r := &controller.SecretReconciler{
+		Client:        fakeClient,
+		Reader:        fakeClient,
+		Recorder:      recorder,
+		ACMPool:       &acmclient.MockPool{Client: m},
+		DefaultRegion: "us-east-1",
+	}
+
+	// Certificate carries acm.sync/enabled; Secret has no annotation.
+	certObj := &unstructured.Unstructured{}
+	certObj.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
+	certObj.SetName("my-cert")
+	certObj.SetNamespace("default")
+	certObj.SetAnnotations(map[string]string{annotations.Enabled: "true"})
+	require.NoError(t, fakeClient.Create(context.Background(), certObj))
+
+	secret := tlsSecret(nil, certPEM, keyPEM) // no acm.sync/enabled on Secret
+	secret.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "cert-manager.io/v1",
+		Kind:       "Certificate",
+		Name:       "my-cert",
+	}}
+	require.NoError(t, fakeClient.Create(context.Background(), secret))
+
+	_, err := r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+
+	var updated corev1.Secret
+	require.NoError(t, fakeClient.Get(context.Background(),
+		k8stypes.NamespacedName{Name: "s", Namespace: "default"}, &updated))
+	assert.Equal(t, arn, updated.Annotations[annotations.ARN])
+	m.AssertCalled(t, "ImportCertificate", mock.Anything, mock.Anything)
+}
+
+// TestReconcile_CertificateAnnotation_RegionFallback verifies that
+// acm.sync/region on the Certificate is used when the Secret has no region
+// annotation.
+func TestReconcile_CertificateAnnotation_RegionFallback(t *testing.T) {
+	certPEM, keyPEM := generateCert(t)
+	const arn = "arn:aws:acm:eu-west-1:123:certificate/new"
+
+	m := &acmclient.MockACMAPI{}
+	m.On("ImportCertificate", mock.Anything, mock.Anything).
+		Return(&awsacm.ImportCertificateOutput{CertificateArn: aws.String(arn)}, nil)
+
+	sc := runtime.NewScheme()
+	_ = corev1.AddToScheme(sc)
+
+	var calledRegion string
+	pool := &regionCapturingPool{
+		client: m,
+		capture: func(r string) { calledRegion = r },
+	}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(sc).Build()
+	recorder := record.NewFakeRecorder(32)
+	r := &controller.SecretReconciler{
+		Client:        fakeClient,
+		Reader:        fakeClient,
+		Recorder:      recorder,
+		ACMPool:       pool,
+		DefaultRegion: "us-east-1",
+	}
+
+	certObj := &unstructured.Unstructured{}
+	certObj.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
+	certObj.SetName("my-cert")
+	certObj.SetNamespace("default")
+	certObj.SetAnnotations(map[string]string{
+		annotations.Enabled: "true",
+		annotations.Region:  "eu-west-1",
+	})
+	require.NoError(t, fakeClient.Create(context.Background(), certObj))
+
+	secret := tlsSecret(nil, certPEM, keyPEM)
+	secret.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "cert-manager.io/v1",
+		Kind:       "Certificate",
+		Name:       "my-cert",
+	}}
+	require.NoError(t, fakeClient.Create(context.Background(), secret))
+
+	_, err := r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	assert.Equal(t, "eu-west-1", calledRegion)
+}
+
+// regionCapturingPool records the region passed to ClientForRegion.
+type regionCapturingPool struct {
+	client  acmclient.ACMAPI
+	capture func(string)
+}
+
+func (p *regionCapturingPool) ClientForRegion(region string) acmclient.ACMAPI {
+	p.capture(region)
+	return p.client
+}
+
 // TestReconcile_Skip_BackfillsARNOntoCertificate verifies that when the
 // fingerprint is unchanged (skip path), the controller still mirrors the ARN
 // onto the owning Certificate if it is missing — covering the upgrade case
