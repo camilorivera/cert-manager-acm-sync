@@ -34,6 +34,9 @@ spec:
             - "--leader-elect={{ .Values.controller.leaderElect }}"
             - "--metrics-bind-address=:8080"
             - "--health-probe-bind-address=:8081"
+            {{- if not .Values.rbac.clusterScoped }}
+            - "--namespace={{ .Release.Namespace }}"
+            {{- end }}
           env:
             - name: AWS_REGION
               value: {{ .Values.controller.defaultRegion | quote }}

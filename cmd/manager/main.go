@@ -12,6 +12,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -31,6 +32,7 @@ func init() {
 func main() {
 	var (
 		defaultRegion   string
+		namespace       string
 		leaderElect     bool
 		metricsAddr     string
 		healthProbeAddr string
@@ -39,6 +41,8 @@ func main() {
 
 	flag.StringVar(&defaultRegion, "default-region", "us-east-1",
 		"Default AWS region for ACM imports when acm.sync/region is not set.")
+	flag.StringVar(&namespace, "namespace", "",
+		"Namespace to watch for TLS Secrets. Empty watches all namespaces (requires ClusterRole).")
 	flag.BoolVar(&leaderElect, "leader-elect", true,
 		"Enable leader election to prevent multiple active controllers.")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
@@ -68,7 +72,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	mgrOpts := ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
@@ -76,7 +80,14 @@ func main() {
 		HealthProbeBindAddress: healthProbeAddr,
 		LeaderElection:         leaderElect,
 		LeaderElectionID:       leaderElectID,
-	})
+	}
+	if namespace != "" {
+		mgrOpts.Cache = cache.Options{
+			DefaultNamespaces: map[string]cache.Config{namespace: {}},
+		}
+	}
+
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), mgrOpts)
 	if err != nil {
 		setupLog.Error(err, "unable to create manager")
 		os.Exit(1)
@@ -101,7 +112,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	setupLog.Info("starting manager", "defaultRegion", defaultRegion)
+	setupLog.Info("starting manager", "defaultRegion", defaultRegion, "namespace", func() string {
+		if namespace == "" {
+			return "<all>"
+		}
+		return namespace
+	}())
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
