@@ -148,37 +148,107 @@ kubectl get secret my-service-tls -o jsonpath='{.metadata.annotations}' | jq
 
 ## Development
 
-No local Go installation required — all commands run inside Docker containers.
+No local Go installation required. Everything runs inside Docker containers via Docker Compose. You only need **Docker Desktop** (or Docker Engine) installed.
 
-### First time setup
+### Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine + Compose plugin)
+- `make`
+
+### How it works
+
+Two Compose files define the dev environment:
+
+| File | Purpose |
+|---|---|
+| `docker-compose.yml` | `dev` service for build/lint/mod commands; `lint` service for golangci-lint |
+| `docker-compose.test.yml` | `test` service that runs the full test suite including controller integration tests |
+
+Both mount the project root as `/workspace` and share persistent volume caches for the Go build cache and module cache, so repeated runs are fast.
+
+### First-time setup
+
+Clone the repo and resolve modules. This generates `go.sum` — **commit it** so subsequent builds are reproducible and fast.
 
 ```bash
-# Generate go.sum (commit this file)
-make setup
+make setup        # runs go mod tidy inside the dev container
+git add go.sum
+git commit -m "chore: add go.sum"
 ```
 
-### Common commands
+### Day-to-day commands
 
 ```bash
-make build        # Compile the manager binary to bin/manager
-make test-unit    # Run unit tests (fast, no external dependencies)
-make test         # Run all tests including controller integration tests
-make lint         # Run golangci-lint
-make docker-build # Build the Docker image locally
+make build        # compile manager binary → bin/manager
+make test-unit    # unit tests only (fast, no external deps)
+make test         # full test suite including envtest integration tests
+make lint         # golangci-lint
+make mod-tidy     # update go.mod and go.sum
+make docker-build # build the production Docker image (tag: dev)
 ```
 
-### Run the controller locally against a cluster
+All commands above run entirely inside containers — no Go, no linter, nothing installed locally.
+
+### Running an arbitrary Go command
 
 ```bash
-# Point kubectl at your cluster, then:
-go run ./cmd/manager \
-  --default-region=us-east-1 \
-  --leader-elect=false \
-  --metrics-bind-address=:8080 \
-  --health-probe-bind-address=:8081
+# Usage: make go CMD="<go subcommand and flags>"
+make go CMD="vet ./..."
+make go CMD="build -v ./cmd/manager"
 ```
 
-The controller will use your local kubeconfig and AWS credentials (`AWS_PROFILE`, `~/.aws/credentials`, or IRSA if running inside EKS).
+### Volumes and caching
+
+The Compose setup uses two named Docker volumes:
+
+| Volume | Purpose |
+|---|---|
+| `go-build-cache` | Go build cache (`GOCACHE`) — speeds up incremental builds |
+| `go-mod-cache` | Module download cache (`GOPATH/pkg/mod`) — avoids re-downloading |
+
+To reset the caches (e.g. after a Go version upgrade):
+
+```bash
+docker volume rm cert-manager-acm-sync_go-build-cache cert-manager-acm-sync_go-mod-cache
+```
+
+### Integration tests (envtest)
+
+The `make test` target first downloads the Kubernetes API server and etcd binaries needed by envtest, then runs all tests. On first run this takes ~30 seconds to download; subsequent runs use the cached binaries from `.envtest/bin/`.
+
+```bash
+make setup-envtest   # download envtest binaries only
+make test            # download (if needed) + run all tests
+```
+
+### Running the controller against a real cluster
+
+The dev container mounts the project source but not your kubeconfig or AWS credentials. The easiest way to run the controller locally against a real cluster is to pass them explicitly:
+
+```bash
+docker compose run --rm \
+  -v "$HOME/.kube:/root/.kube:ro" \
+  -v "$HOME/.aws:/root/.aws:ro" \
+  -e AWS_PROFILE=my-profile \
+  --entrypoint="" \
+  dev go run ./cmd/manager \
+    --default-region=us-east-1 \
+    --leader-elect=false
+```
+
+Or if you prefer, export static credentials as env vars:
+
+```bash
+docker compose run --rm \
+  -e AWS_ACCESS_KEY_ID \
+  -e AWS_SECRET_ACCESS_KEY \
+  -e AWS_SESSION_TOKEN \
+  -v "$HOME/.kube:/root/.kube:ro" \
+  --entrypoint="" \
+  dev go run ./cmd/manager \
+    --default-region=us-east-1 \
+    --leader-elect=false
+```
 
 ## Helm Chart Values
 
