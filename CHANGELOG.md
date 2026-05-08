@@ -1,3 +1,10 @@
+# [0.5.0](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.4.1...v0.5.0) (2026-05-08)
+
+
+### Features
+
+* recover ACM ARN from cert-manager Certificate when Secret is recreated ([b9dd114](https://github.com/camilorivera/cert-manager-acm-sync/commit/b9dd114ced14149a67dc768cc0e5657325f1cf37))
+
 ## [0.4.1](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.4.0...v0.4.1) (2026-05-08)
 
 
