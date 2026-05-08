@@ -1,3 +1,11 @@
+## [0.4.1](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.4.0...v0.4.1) (2026-05-08)
+
+
+### Bug Fixes
+
+* remove conventionalcommits preset to fix missing module error ([198e356](https://github.com/camilorivera/cert-manager-acm-sync/commit/198e3563699d7c77fbd67f96613610a1b5020298))
+* restrict cache to release namespace when rbac.clusterScoped=false ([bedd5c0](https://github.com/camilorivera/cert-manager-acm-sync/commit/bedd5c04bcfa3b3be5d3d645eca9d90b5718cddf))
+
 # [0.4.0](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.3.1...v0.4.0) (2026-05-08)
 
 
