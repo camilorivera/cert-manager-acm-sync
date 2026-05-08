@@ -86,27 +86,29 @@ jobs:
           cache-to: type=gha,mode=max
 
   helm:
-    name: Helm — Package & Release
+    name: Helm — Push OCI chart to GHCR
     needs: release
     if: needs.release.outputs.published == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
         with:
           ref: v${{ needs.release.outputs.version }}
-          fetch-depth: 0
 
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: azure/setup-helm@v4
 
-      - uses: helm/chart-releaser-action@v1.6.0
-        with:
-          charts_dir: charts
-        env:
-          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package and push chart
+        run: |
+          helm package charts/cert-manager-acm-sync
+          helm push cert-manager-acm-sync-${{ needs.release.outputs.version }}.tgz \
+            oci://ghcr.io/${{ github.repository_owner }}

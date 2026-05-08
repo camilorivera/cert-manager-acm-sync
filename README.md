@@ -69,8 +69,8 @@ kubectl annotate secret my-tls acm.sync/enabled=true
 **Helm (recommended):**
 
 ```bash
-helm repo add cert-manager-acm-sync https://camilorivera.github.io/cert-manager-acm-sync
-helm install cert-manager-acm-sync cert-manager-acm-sync/cert-manager-acm-sync \
+helm install cert-manager-acm-sync oci://ghcr.io/camilorivera/cert-manager-acm-sync \
+  --version 0.1.1 \
   --namespace cert-manager-acm-sync \
   --create-namespace \
   --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=arn:aws:iam::ACCOUNT_ID:role/cert-manager-acm-sync \
