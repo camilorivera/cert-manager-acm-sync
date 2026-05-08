@@ -68,5 +68,5 @@ func (TLSAnnotatedPredicate) Update(e event.UpdateEvent) bool {
 	return !reflect.DeepEqual(oldFiltered, newFiltered)
 }
 
-func (TLSAnnotatedPredicate) Delete(_ event.DeleteEvent) bool { return false }
+func (TLSAnnotatedPredicate) Delete(_ event.DeleteEvent) bool   { return false }
 func (TLSAnnotatedPredicate) Generic(_ event.GenericEvent) bool { return false }

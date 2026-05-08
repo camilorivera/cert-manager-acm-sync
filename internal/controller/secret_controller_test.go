@@ -65,11 +65,11 @@ func buildReconciler(t *testing.T, acmMock *acmclient.MockACMAPI) (*controller.S
 	}, recorder
 }
 
-func tlsSecret(ns string, ann map[string]string, certPEM, keyPEM []byte) *corev1.Secret {
+func tlsSecret(ann map[string]string, certPEM, keyPEM []byte) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "s",
-			Namespace:   ns,
+			Namespace:   "default",
 			Annotations: ann,
 		},
 		Type: corev1.SecretTypeTLS,
@@ -80,8 +80,8 @@ func tlsSecret(ns string, ann map[string]string, certPEM, keyPEM []byte) *corev1
 	}
 }
 
-func nn(ns string) ctrl.Request {
-	return ctrl.Request{NamespacedName: k8stypes.NamespacedName{Name: "s", Namespace: ns}}
+func nn() ctrl.Request {
+	return ctrl.Request{NamespacedName: k8stypes.NamespacedName{Name: "s", Namespace: "default"}}
 }
 
 func TestReconcile_SecretWithoutAnnotation_SkipsACM(t *testing.T) {
@@ -90,9 +90,9 @@ func TestReconcile_SecretWithoutAnnotation_SkipsACM(t *testing.T) {
 	r, _ := buildReconciler(t, m)
 
 	require.NoError(t, r.Client.Create(context.Background(),
-		tlsSecret("default", nil, certPEM, keyPEM)))
+		tlsSecret( nil, certPEM, keyPEM)))
 
-	_, err := r.Reconcile(context.Background(), nn("default"))
+	_, err := r.Reconcile(context.Background(), nn())
 	require.NoError(t, err)
 	m.AssertNotCalled(t, "ImportCertificate")
 	m.AssertNotCalled(t, "DescribeCertificate")
@@ -109,9 +109,9 @@ func TestReconcile_FirstImport_WritesARNAnnotation(t *testing.T) {
 
 	r, recorder := buildReconciler(t, m)
 	require.NoError(t, r.Client.Create(context.Background(),
-		tlsSecret("default", map[string]string{annotations.Enabled: "true"}, certPEM, keyPEM)))
+		tlsSecret( map[string]string{annotations.Enabled: "true"}, certPEM, keyPEM)))
 
-	_, err := r.Reconcile(context.Background(), nn("default"))
+	_, err := r.Reconcile(context.Background(), nn())
 	require.NoError(t, err)
 
 	var updated corev1.Secret
@@ -139,13 +139,13 @@ func TestReconcile_FingerprintMatch_SkipsImport(t *testing.T) {
 
 	r, _ := buildReconciler(t, m)
 	require.NoError(t, r.Client.Create(context.Background(),
-		tlsSecret("default", map[string]string{
+		tlsSecret( map[string]string{
 			annotations.Enabled:     "true",
 			annotations.ARN:         arn,
 			annotations.Fingerprint: fp,
 		}, certPEM, keyPEM)))
 
-	_, err = r.Reconcile(context.Background(), nn("default"))
+	_, err = r.Reconcile(context.Background(), nn())
 	require.NoError(t, err)
 	m.AssertNotCalled(t, "ImportCertificate")
 }
@@ -165,13 +165,13 @@ func TestReconcile_StaleARN_CreatesNewCertificate(t *testing.T) {
 
 	r, recorder := buildReconciler(t, m)
 	require.NoError(t, r.Client.Create(context.Background(),
-		tlsSecret("default", map[string]string{
+		tlsSecret( map[string]string{
 			annotations.Enabled:     "true",
 			annotations.ARN:         staleARN,
 			annotations.Fingerprint: "old-fp",
 		}, certPEM, keyPEM)))
 
-	_, err := r.Reconcile(context.Background(), nn("default"))
+	_, err := r.Reconcile(context.Background(), nn())
 	require.NoError(t, err)
 
 	var updated corev1.Secret
@@ -200,13 +200,13 @@ func TestReconcile_Renewal_ReimportsWithSameARN(t *testing.T) {
 
 	r, _ := buildReconciler(t, m)
 	require.NoError(t, r.Client.Create(context.Background(),
-		tlsSecret("default", map[string]string{
+		tlsSecret( map[string]string{
 			annotations.Enabled:     "true",
 			annotations.ARN:         arn,
 			annotations.Fingerprint: "old-fp",
 		}, certPEM, keyPEM)))
 
-	_, err := r.Reconcile(context.Background(), nn("default"))
+	_, err := r.Reconcile(context.Background(), nn())
 	require.NoError(t, err)
 
 	var updated corev1.Secret
