@@ -19,9 +19,10 @@ cert-manager ──► kubernetes.io/tls Secret ──► cert-manager-acm-sync 
 
 1. cert-manager issues a TLS certificate and stores it as a `kubernetes.io/tls` Secret.
 2. You annotate the Secret (or the cert-manager `Certificate` resource's `secretTemplate`) with `acm.sync/enabled: "true"`.
-3. The controller imports the certificate into ACM and writes the ARN back as `acm.sync/arn`.
+3. The controller imports the certificate into ACM and writes the ARN back as `acm.sync/arn` on both the Secret and the owning `Certificate` resource.
 4. When cert-manager renews the certificate, the controller detects the fingerprint change and **re-imports to the same ARN** — no downstream reconfiguration needed.
-5. If the ACM certificate is deleted externally, the controller detects the stale ARN on the next reconcile and creates a new one.
+5. If the Secret is deleted and recreated by cert-manager, the controller recovers the ARN from the owning `Certificate` annotation and reimports to the **same ARN** instead of creating a new certificate.
+6. If the ACM certificate is deleted externally, the controller detects the stale ARN on the next reconcile and creates a new one.
 
 ## Annotation Reference
 
@@ -379,10 +380,11 @@ The controller emits events on each managed Secret:
 │  │  SecretReconciler                                        │   │
 │  │  1. Predicate: type=tls + annotation filter              │   │
 │  │  2. Fingerprint: SHA-256 of leaf cert DER                │   │
-│  │  3. DescribeCertificate → detect stale ARNs              │   │
-│  │  4. ImportCertificate (import / re-import / skip)        │   │
-│  │  5. Patch acm.sync/* annotations back onto Secret        │   │
-│  │  6. Emit Events + Prometheus metrics                      │   │
+│  │  3. Recover ARN from Certificate owner if Secret lost it │   │
+│  │  4. DescribeCertificate → detect stale ARNs              │   │
+│  │  5. ImportCertificate (import / re-import / skip)        │   │
+│  │  6. Patch acm.sync/* annotations onto Secret + Certificate│   │
+│  │  7. Emit Events + Prometheus metrics                      │   │
 │  └──────────────────────┬───────────────────────────────────┘   │
 │          ServiceAccount │ IRSA                                   │
 └─────────────────────────┼──────────────────────────────────────--┘
@@ -397,7 +399,7 @@ The controller emits events on each managed Secret:
 ## Security
 
 - **Private keys are never logged.** The controller extracts cert fields by name and never passes `corev1.Secret` objects to log statements.
-- **Patch-only access.** RBAC grants `get`, `list`, `watch`, `patch` on Secrets — no `create`, `update`, or `delete`.
+- **Patch-only access.** RBAC grants `get`, `list`, `watch`, `patch` on Secrets and `get`, `patch` on cert-manager `Certificate` resources — no `create`, `update`, or `delete`.
 - **No ACM deletion.** The controller cannot delete certificates from ACM by design.
 - **IRSA scoped to this ServiceAccount.** The IAM trust policy restricts `AssumeRoleWithWebIdentity` to the exact `system:serviceaccount:cert-manager-acm-sync:cert-manager-acm-sync` principal.
 
