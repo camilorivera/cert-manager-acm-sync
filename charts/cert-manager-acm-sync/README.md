@@ -5,10 +5,11 @@ A Kubernetes controller that automatically syncs TLS certificates issued by [cer
 ## How it works
 
 1. cert-manager issues a TLS certificate and stores it as a `kubernetes.io/tls` Secret.
-2. You annotate the Secret with `acm.sync/enabled: "true"`.
-3. The controller detects the Secret, imports the certificate into ACM, and writes the ARN back as `acm.sync/arn`.
+2. You annotate the Secret (or the cert-manager `Certificate` resource's `secretTemplate`) with `acm.sync/enabled: "true"`.
+3. The controller imports the certificate into ACM and writes the ARN back as `acm.sync/arn` on both the Secret and the owning `Certificate` resource.
 4. When cert-manager renews the certificate, the controller detects the fingerprint change and re-imports to the **same ARN** — ALBs, CloudFront, and API Gateway require no reconfiguration.
-5. If the ACM certificate is deleted externally, the controller detects the stale ARN and creates a new certificate.
+5. If the Secret is deleted and recreated by cert-manager, the controller recovers the ARN from the owning `Certificate` annotation and reimports to the **same ARN** instead of creating a new certificate.
+6. If the ACM certificate is deleted externally, the controller detects the stale ARN and creates a new certificate.
 
 ## Installation
 
