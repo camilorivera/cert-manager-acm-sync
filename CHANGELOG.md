@@ -1,3 +1,10 @@
+# [0.3.0](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.2.0...v0.3.0) (2026-05-08)
+
+
+### Features
+
+* move container image from Docker Hub to GHCR ([19195e3](https://github.com/camilorivera/cert-manager-acm-sync/commit/19195e3dcf388fb3be98f6e05fae002a201ab711))
+
 # [0.2.0](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.1.1...v0.2.0) (2026-05-08)
 
 
