@@ -73,15 +73,15 @@ podDisruptionBudget:
 
 # cert-manager Certificate resources to create alongside the controller.
 # Requires cert-manager to be installed in the cluster.
+# Place acm.sync/* annotations in metadata.annotations (not secretTemplate).
 certificates: []
 # - name: my-service-tls
 #   namespace: ""   # defaults to the release namespace
+#   annotations:
+#     acm.sync/enabled: "true"
+#     # acm.sync/region: "us-east-1"   # required for CloudFront
 #   spec:
 #     secretName: my-service-tls
-#     secretTemplate:
-#       annotations:
-#         acm.sync/enabled: "true"
-#         # acm.sync/region: "us-east-1"   # required for CloudFront
 #     dnsNames:
 #       - my-service.example.com
 #     issuerRef:
