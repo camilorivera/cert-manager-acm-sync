@@ -13,34 +13,26 @@ A Kubernetes controller that automatically syncs TLS certificates issued by [cer
 
 ## Installation
 
-### Helm (recommended)
-
 ```bash
-helm repo add cert-manager-acm-sync https://camilorivera.github.io/cert-manager-acm-sync
-helm install cert-manager-acm-sync cert-manager-acm-sync/cert-manager-acm-sync \
+helm install cert-manager-acm-sync oci://ghcr.io/camilorivera/charts/cert-manager-acm-sync \
+  --version <version> \
   --namespace cert-manager-acm-sync \
   --create-namespace \
   --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=arn:aws:iam::ACCOUNT_ID:role/cert-manager-acm-sync \
   --set controller.defaultRegion=us-east-1
 ```
 
-### Raw YAML
-
-```bash
-kubectl apply -f config/manager/service_account.yaml
-kubectl apply -f config/rbac/
-kubectl apply -f config/manager/manager.yaml
-```
+See [releases](https://github.com/camilorivera/cert-manager-acm-sync/releases) for the latest version.
 
 ## Annotation Reference
 
-| Annotation | Set by | Description |
-|---|---|---|
-| `acm.sync/enabled: "true"` | User | **Required** — opt-in trigger |
-| `acm.sync/region: "us-east-1"` | User | Optional — target AWS region. **Required for CloudFront** (must be `us-east-1`) |
-| `acm.sync/arn` | Controller | ACM certificate ARN written after first import |
-| `acm.sync/fingerprint` | Controller | SHA-256 of leaf cert DER bytes; used for change detection |
-| `acm.sync/last-sync` | Controller | RFC3339 timestamp of last successful sync |
+| Annotation | Set by | Required | Description |
+|---|---|---|---|
+| `acm.sync/enabled` | User | Yes | Set to `"true"` to opt this Secret into ACM sync |
+| `acm.sync/region` | User | No | AWS region override. **Required for CloudFront** (`"us-east-1"`) |
+| `acm.sync/arn` | Controller | — | ACM certificate ARN, written after first import |
+| `acm.sync/fingerprint` | Controller | — | SHA-256 of the leaf cert's DER bytes, used for change detection |
+| `acm.sync/last-sync` | Controller | — | RFC3339 timestamp of the last successful sync |
 
 ## Quick Start
 
@@ -57,6 +49,7 @@ spec:
   secretTemplate:
     annotations:
       acm.sync/enabled: "true"
+      # acm.sync/region: "us-east-1"  # required for CloudFront
   dnsNames:
     - my-service.example.com
   issuerRef:
@@ -64,11 +57,21 @@ spec:
     kind: ClusterIssuer
 ```
 
-### CloudFront (must be in us-east-1)
+### Via Helm values (creates the Certificate alongside the controller)
 
 ```yaml
-acm.sync/enabled: "true"
-acm.sync/region: "us-east-1"
+certificates:
+  - name: my-service-tls
+    spec:
+      secretName: my-service-tls
+      secretTemplate:
+        annotations:
+          acm.sync/enabled: "true"
+      dnsNames:
+        - my-service.example.com
+      issuerRef:
+        name: letsencrypt-prod
+        kind: ClusterIssuer
 ```
 
 ## IAM Permissions
@@ -91,23 +94,29 @@ acm.sync/region: "us-east-1"
 }
 ```
 
+> `acm:DeleteCertificate` is intentionally omitted. The controller never deletes ACM certificates.
+
 ## Values
 
 | Key | Default | Description |
 |---|---|---|
-| `replicaCount` | `2` | Number of controller replicas (leader election active) |
-| `image.repository` | `camilorivera/cert-manager-acm-sync` | Docker image repository |
-| `image.tag` | `""` (uses appVersion) | Image tag |
-| `controller.defaultRegion` | `us-east-1` | Default AWS region |
+| `replicaCount` | `2` | Replicas (leader election keeps only one active) |
+| `image.repository` | `ghcr.io/camilorivera/cert-manager-acm-sync` | Container image |
+| `image.tag` | `""` | Defaults to the chart's `appVersion` |
+| `controller.defaultRegion` | `us-east-1` | Default AWS region for ACM imports |
 | `controller.leaderElect` | `true` | Enable leader election |
-| `serviceAccount.annotations` | `{}` | Annotations for IRSA |
+| `serviceAccount.annotations` | `{}` | Use to set the IRSA role ARN |
 | `rbac.create` | `true` | Create RBAC resources |
-| `rbac.clusterScoped` | `true` | ClusterRole (all namespaces) vs Role (release namespace only) |
+| `rbac.clusterScoped` | `true` | `true` = ClusterRole (all namespaces), `false` = Role (release namespace only) |
+| `podDisruptionBudget.enabled` | `true` | Create a PodDisruptionBudget |
+| `certificates` | `[]` | cert-manager `Certificate` resources to create alongside the controller |
 
 ## Observability
 
 Prometheus metrics exposed on `:8080/metrics`:
 
-- `acm_sync_total{region, action}` — sync operations (import / reimport / skipped)
-- `acm_sync_errors_total{region, action}` — sync errors
-- `acm_sync_last_sync_timestamp{region, secret}` — unix timestamp of last successful sync
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `acm_sync_total` | Counter | `region`, `action` | Sync operations (`import` / `reimport` / `skipped`) |
+| `acm_sync_errors_total` | Counter | `region`, `action` | Failed sync operations |
+| `acm_sync_last_sync_timestamp` | Gauge | `region`, `secret` | Unix timestamp of last successful sync |
