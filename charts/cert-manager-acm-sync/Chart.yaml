@@ -17,7 +17,7 @@ keywords:
   - certificates
   - aws
 annotations:
-  artifacthub.io/repositoryID: "4aa6ab27-970e-4cf1-93e4-59bd72ff2f98"
+  artifacthub.io/repositoryID: "70379bff-0637-43e8-b195-661f303e72ea"
   artifacthub.io/license: Apache-2.0
   artifacthub.io/operator: "true"
   artifacthub.io/operatorCapabilities: Basic Install
