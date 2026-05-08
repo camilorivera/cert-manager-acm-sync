@@ -1,3 +1,5 @@
+## [0.5.1](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.5.0...v0.5.1) (2026-05-08)
+
 # [0.5.0](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.4.1...v0.5.0) (2026-05-08)
 
 
