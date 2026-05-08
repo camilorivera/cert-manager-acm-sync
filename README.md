@@ -69,7 +69,7 @@ kubectl annotate secret my-tls acm.sync/enabled=true
 **Helm (recommended):**
 
 ```bash
-helm install cert-manager-acm-sync oci://ghcr.io/camilorivera/cert-manager-acm-sync \
+helm install cert-manager-acm-sync oci://ghcr.io/camilorivera/charts/cert-manager-acm-sync \
   --version 0.1.1 \
   --namespace cert-manager-acm-sync \
   --create-namespace \

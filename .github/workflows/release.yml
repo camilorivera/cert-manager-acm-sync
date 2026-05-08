@@ -115,4 +115,4 @@ jobs:
         run: |
           helm package charts/cert-manager-acm-sync
           helm push cert-manager-acm-sync-${{ needs.release.outputs.version }}.tgz \
-            oci://ghcr.io/${{ github.repository_owner }}
+            oci://ghcr.io/${{ github.repository_owner }}/charts
