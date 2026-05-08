@@ -90,7 +90,7 @@ func TestReconcile_SecretWithoutAnnotation_SkipsACM(t *testing.T) {
 	r, _ := buildReconciler(t, m)
 
 	require.NoError(t, r.Client.Create(context.Background(),
-		tlsSecret( nil, certPEM, keyPEM)))
+		tlsSecret(nil, certPEM, keyPEM)))
 
 	_, err := r.Reconcile(context.Background(), nn())
 	require.NoError(t, err)
@@ -109,7 +109,7 @@ func TestReconcile_FirstImport_WritesARNAnnotation(t *testing.T) {
 
 	r, recorder := buildReconciler(t, m)
 	require.NoError(t, r.Client.Create(context.Background(),
-		tlsSecret( map[string]string{annotations.Enabled: "true"}, certPEM, keyPEM)))
+		tlsSecret(map[string]string{annotations.Enabled: "true"}, certPEM, keyPEM)))
 
 	_, err := r.Reconcile(context.Background(), nn())
 	require.NoError(t, err)
@@ -139,7 +139,7 @@ func TestReconcile_FingerprintMatch_SkipsImport(t *testing.T) {
 
 	r, _ := buildReconciler(t, m)
 	require.NoError(t, r.Client.Create(context.Background(),
-		tlsSecret( map[string]string{
+		tlsSecret(map[string]string{
 			annotations.Enabled:     "true",
 			annotations.ARN:         arn,
 			annotations.Fingerprint: fp,
@@ -165,7 +165,7 @@ func TestReconcile_StaleARN_CreatesNewCertificate(t *testing.T) {
 
 	r, recorder := buildReconciler(t, m)
 	require.NoError(t, r.Client.Create(context.Background(),
-		tlsSecret( map[string]string{
+		tlsSecret(map[string]string{
 			annotations.Enabled:     "true",
 			annotations.ARN:         staleARN,
 			annotations.Fingerprint: "old-fp",
@@ -200,7 +200,7 @@ func TestReconcile_Renewal_ReimportsWithSameARN(t *testing.T) {
 
 	r, _ := buildReconciler(t, m)
 	require.NoError(t, r.Client.Create(context.Background(),
-		tlsSecret( map[string]string{
+		tlsSecret(map[string]string{
 			annotations.Enabled:     "true",
 			annotations.ARN:         arn,
 			annotations.Fingerprint: "old-fp",
