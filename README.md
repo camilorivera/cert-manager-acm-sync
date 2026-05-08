@@ -37,7 +37,55 @@ cert-manager ──► kubernetes.io/tls Secret ──► cert-manager-acm-sync 
 
 ## Quick Start
 
-### 1. Annotate your cert-manager Certificate
+### 1. Install the controller
+
+```bash
+helm install cert-manager-acm-sync oci://ghcr.io/camilorivera/charts/cert-manager-acm-sync \
+  --version <version> \
+  --namespace cert-manager-acm-sync \
+  --create-namespace \
+  --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=arn:aws:iam::ACCOUNT_ID:role/cert-manager-acm-sync \
+  --set controller.defaultRegion=us-east-1
+```
+
+See [releases](https://github.com/camilorivera/cert-manager-acm-sync/releases) for the latest version.
+
+### 2. Define your certificates
+
+**Option A — via Helm values (recommended):**
+
+Declare `Certificate` resources directly in your `values.yaml`. The Helm chart creates them for you alongside the controller:
+
+```yaml
+certificates:
+  - name: my-service-tls
+    spec:
+      secretName: my-service-tls
+      secretTemplate:
+        annotations:
+          acm.sync/enabled: "true"
+      dnsNames:
+        - my-service.example.com
+      issuerRef:
+        name: letsencrypt-prod
+        kind: ClusterIssuer
+
+  # CloudFront certificate — must be in us-east-1
+  - name: my-cdn-tls
+    spec:
+      secretName: my-cdn-tls
+      secretTemplate:
+        annotations:
+          acm.sync/enabled: "true"
+          acm.sync/region: "us-east-1"
+      dnsNames:
+        - cdn.example.com
+      issuerRef:
+        name: letsencrypt-prod
+        kind: ClusterIssuer
+```
+
+**Option B — annotate an existing cert-manager Certificate:**
 
 ```yaml
 apiVersion: cert-manager.io/v1
@@ -58,31 +106,10 @@ spec:
     kind: ClusterIssuer
 ```
 
-Or annotate an existing TLS Secret directly:
+**Option C — annotate an existing TLS Secret directly:**
 
-```yaml
+```bash
 kubectl annotate secret my-tls acm.sync/enabled=true
-```
-
-### 2. Install the controller
-
-**Helm (recommended):**
-
-```bash
-helm install cert-manager-acm-sync oci://ghcr.io/camilorivera/charts/cert-manager-acm-sync \
-  --version 0.1.1 \
-  --namespace cert-manager-acm-sync \
-  --create-namespace \
-  --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=arn:aws:iam::ACCOUNT_ID:role/cert-manager-acm-sync \
-  --set controller.defaultRegion=us-east-1
-```
-
-**Raw YAML:**
-
-```bash
-kubectl apply -f config/manager/service_account.yaml
-kubectl apply -f config/rbac/
-kubectl apply -f config/manager/manager.yaml
 ```
 
 ### 3. Verify
@@ -145,6 +172,50 @@ kubectl get secret my-service-tls -o jsonpath='{.metadata.annotations}' | jq
   ]
 }
 ```
+
+## Helm Chart Values
+
+| Key | Default | Description |
+|---|---|---|
+| `replicaCount` | `2` | Replicas (leader election keeps only one active) |
+| `image.repository` | `ghcr.io/camilorivera/cert-manager-acm-sync` | Container image |
+| `image.tag` | `""` | Defaults to the chart's `appVersion` |
+| `controller.defaultRegion` | `us-east-1` | Default AWS region |
+| `controller.leaderElect` | `true` | Enable leader election |
+| `serviceAccount.annotations` | `{}` | Use to set the IRSA role ARN |
+| `rbac.create` | `true` | Create RBAC resources |
+| `rbac.clusterScoped` | `true` | `true` = ClusterRole (all namespaces), `false` = Role (release namespace only) |
+| `podDisruptionBudget.enabled` | `true` | Create a PodDisruptionBudget |
+| `certificates` | `[]` | cert-manager `Certificate` resources to create alongside the controller |
+
+### certificates
+
+Each entry in the `certificates` list renders a full cert-manager `Certificate` resource. The `namespace` field is optional and defaults to the release namespace. The `spec` is passed through as-is, so all cert-manager Certificate spec fields are supported.
+
+```yaml
+certificates:
+  - name: my-service-tls
+    namespace: default       # optional, defaults to release namespace
+    spec:
+      secretName: my-service-tls
+      secretTemplate:
+        annotations:
+          acm.sync/enabled: "true"
+          # acm.sync/region: "us-east-1"  # required for CloudFront
+      dnsNames:
+        - my-service.example.com
+      issuerRef:
+        name: letsencrypt-prod
+        kind: ClusterIssuer
+      # Any other cert-manager Certificate spec fields are supported:
+      # duration: 2160h
+      # renewBefore: 360h
+      # privateKey:
+      #   algorithm: RSA
+      #   size: 2048
+```
+
+> cert-manager must be installed in the cluster before enabling this feature.
 
 ## Development
 
@@ -253,21 +324,6 @@ docker compose run --rm \
     --default-region=us-east-1 \
     --leader-elect=false
 ```
-
-## Helm Chart Values
-
-| Key | Default | Description |
-|---|---|---|
-| `replicaCount` | `2` | Replicas (leader election keeps only one active) |
-| `image.repository` | `ghcr.io/camilorivera/cert-manager-acm-sync` | Container image |
-| `image.tag` | `""` | Defaults to the chart's `appVersion` |
-| `controller.defaultRegion` | `us-east-1` | Default AWS region |
-| `controller.leaderElect` | `true` | Enable leader election |
-| `serviceAccount.annotations` | `{}` | Use to set the IRSA role ARN |
-| `rbac.create` | `true` | Create RBAC resources |
-| `rbac.clusterScoped` | `true` | `true` = ClusterRole (all namespaces), `false` = Role (release namespace only) |
-| `podDisruptionBudget.enabled` | `true` | Create a PodDisruptionBudget |
-| `certificates` | `[]` | cert-manager `Certificate` resources to create alongside the controller |
 
 ## Observability
 
