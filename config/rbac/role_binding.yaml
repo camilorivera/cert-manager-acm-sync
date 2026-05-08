@@ -1,0 +1,12 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cert-manager-acm-sync
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cert-manager-acm-sync
+subjects:
+  - kind: ServiceAccount
+    name: cert-manager-acm-sync
+    namespace: cert-manager-acm-sync

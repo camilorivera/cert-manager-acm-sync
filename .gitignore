@@ -1,0 +1,38 @@
+# Build output
+bin/
+*.exe
+*.out
+
+# Test artifacts
+*.test
+*.coverprofile
+coverage.html
+
+# envtest binaries (downloaded locally by setup-envtest)
+.envtest/
+
+# Helm output
+.helm-output/
+
+# Go module vendor directory
+vendor/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Docker
+.dockerignore
+
+# Secrets / local env overrides (never commit these)
+.env
+*.pem
+*.key

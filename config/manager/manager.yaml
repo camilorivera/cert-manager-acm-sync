@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cert-manager-acm-sync
+  namespace: cert-manager-acm-sync
+  labels:
+    app: cert-manager-acm-sync
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cert-manager-acm-sync
+  template:
+    metadata:
+      labels:
+        app: cert-manager-acm-sync
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      serviceAccountName: cert-manager-acm-sync
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: manager
+          image: camilorivera/cert-manager-acm-sync:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--default-region=us-east-1"
+            - "--leader-elect=true"
+            - "--metrics-bind-address=:8080"
+            - "--health-probe-bind-address=:8081"
+          env:
+            - name: AWS_REGION
+              value: "us-east-1"
+          ports:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cert-manager-acm-sync
+  namespace: cert-manager-acm-sync
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: cert-manager-acm-sync

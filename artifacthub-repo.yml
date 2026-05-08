@@ -1,0 +1,7 @@
+# This file is used by Artifact Hub to discover and verify this repository.
+# After creating the repository on https://artifacthub.io, copy the assigned
+# repositoryID below. Artifact Hub will verify ownership via this file.
+repositoryID: ""  # Assigned after registration at artifacthub.io
+owners:
+  - name: Camilo Rivera
+    email: camilo@riverapineda.com

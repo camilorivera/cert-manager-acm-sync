@@ -1,0 +1,24 @@
+services:
+  dev:
+    image: golang:1.23-alpine
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - go-build-cache:/root/.cache/go-build
+      - go-mod-cache:/go/pkg/mod
+    environment:
+      - GOFLAGS=-mod=mod
+      - CGO_ENABLED=0
+
+  lint:
+    image: golangci/golangci-lint:v1.61
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - go-build-cache:/root/.cache/go-build
+      - go-mod-cache:/go/pkg/mod
+    command: ["golangci-lint", "run", "--timeout=5m"]
+
+volumes:
+  go-build-cache:
+  go-mod-cache:

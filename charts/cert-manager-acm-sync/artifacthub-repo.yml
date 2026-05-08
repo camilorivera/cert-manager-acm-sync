@@ -1,0 +1,7 @@
+repositoryID: ""  # Assigned by Artifact Hub after registration
+owners:
+  - name: Camilo Rivera
+    email: camilo@riverapineda.com
+ignore:
+  - name: cert-manager-acm-sync
+    version: "< 0.1.0"

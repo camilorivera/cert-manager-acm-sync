@@ -1,0 +1,72 @@
+replicaCount: 2
+
+image:
+  repository: camilorivera/cert-manager-acm-sync
+  pullPolicy: IfNotPresent
+  # Defaults to Chart.appVersion when empty
+  tag: ""
+
+nameOverride: ""
+fullnameOverride: ""
+
+controller:
+  # Default AWS region for ACM imports.
+  # Override per-Secret with the acm.sync/region annotation.
+  defaultRegion: us-east-1
+  leaderElect: true
+
+serviceAccount:
+  create: true
+  name: ""
+  # IRSA annotation — required for EKS. Set to your IAM role ARN.
+  annotations:
+    eks.amazonaws.com/role-arn: ""
+
+rbac:
+  create: true
+  # true  → ClusterRole + ClusterRoleBinding (Secrets across all namespaces)
+  # false → Role + RoleBinding scoped to the release namespace only
+  clusterScoped: true
+
+resources:
+  requests:
+    cpu: "50m"
+    memory: "64Mi"
+  limits:
+    cpu: "200m"
+    memory: "128Mi"
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: health
+  initialDelaySeconds: 15
+  periodSeconds: 20
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: health
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

@@ -1,0 +1,16 @@
+services:
+  test:
+    image: golang:1.23-alpine
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - go-build-cache:/root/.cache/go-build
+      - go-mod-cache:/go/pkg/mod
+    environment:
+      - CGO_ENABLED=0
+      - KUBEBUILDER_ASSETS=/workspace/.envtest/bin
+    command: ["go", "test", "-v", "-count=1", "./..."]
+
+volumes:
+  go-build-cache:
+  go-mod-cache:
