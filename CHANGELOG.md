@@ -1,3 +1,10 @@
+## [0.3.1](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.3.0...v0.3.1) (2026-05-08)
+
+
+### Bug Fixes
+
+* push Helm chart to separate GHCR path to avoid overwriting container image ([2bce805](https://github.com/camilorivera/cert-manager-acm-sync/commit/2bce80566757139a71233c61e582f91c00394522))
+
 # [0.3.0](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.2.0...v0.3.0) (2026-05-08)
 
 
