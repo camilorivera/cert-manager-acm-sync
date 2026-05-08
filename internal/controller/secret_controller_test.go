@@ -20,7 +20,9 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -59,6 +61,7 @@ func buildReconciler(t *testing.T, acmMock *acmclient.MockACMAPI) (*controller.S
 	recorder := record.NewFakeRecorder(32)
 	return &controller.SecretReconciler{
 		Client:        fakeClient,
+		Reader:        fakeClient,
 		Recorder:      recorder,
 		ACMPool:       &acmclient.MockPool{Client: acmMock},
 		DefaultRegion: "us-east-1",
@@ -213,4 +216,76 @@ func TestReconcile_Renewal_ReimportsWithSameARN(t *testing.T) {
 	require.NoError(t, r.Client.Get(context.Background(),
 		k8stypes.NamespacedName{Name: "s", Namespace: "default"}, &updated))
 	assert.Equal(t, arn, updated.Annotations[annotations.ARN], "ARN must not change on renewal")
+}
+
+// TestReconcile_SecretRecreated_RecoverARNFromCertificate verifies that when a
+// Secret is deleted and recreated by cert-manager (losing the acm.sync/arn
+// annotation), the controller recovers the ARN from the owning Certificate and
+// reimports to the same ACM certificate instead of creating a new one.
+func TestReconcile_SecretRecreated_RecoverARNFromCertificate(t *testing.T) {
+	certPEM, keyPEM := generateCert(t)
+	const existingARN = "arn:aws:acm:us-east-1:123:certificate/existing"
+
+	m := &acmclient.MockACMAPI{}
+	m.On("DescribeCertificate", mock.Anything, mock.MatchedBy(func(in *awsacm.DescribeCertificateInput) bool {
+		return aws.ToString(in.CertificateArn) == existingARN
+	})).Return(&awsacm.DescribeCertificateOutput{
+		Certificate: &acmtypes.CertificateDetail{CertificateArn: aws.String(existingARN)},
+	}, nil)
+	m.On("ImportCertificate", mock.Anything, mock.MatchedBy(func(in *awsacm.ImportCertificateInput) bool {
+		return aws.ToString(in.CertificateArn) == existingARN
+	})).Return(&awsacm.ImportCertificateOutput{CertificateArn: aws.String(existingARN)}, nil)
+
+	sc := runtime.NewScheme()
+	_ = corev1.AddToScheme(sc)
+	fakeClient := fake.NewClientBuilder().WithScheme(sc).Build()
+	recorder := record.NewFakeRecorder(32)
+	r := &controller.SecretReconciler{
+		Client:        fakeClient,
+		Reader:        fakeClient,
+		Recorder:      recorder,
+		ACMPool:       &acmclient.MockPool{Client: m},
+		DefaultRegion: "us-east-1",
+	}
+
+	// Create the Certificate owner with the ARN already persisted.
+	certObj := &unstructured.Unstructured{}
+	certObj.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
+	certObj.SetName("my-cert")
+	certObj.SetNamespace("default")
+	certObj.SetAnnotations(map[string]string{annotations.ARN: existingARN})
+	require.NoError(t, fakeClient.Create(context.Background(), certObj))
+
+	// Recreated Secret: has no ARN annotation but points to the Certificate owner.
+	secret := tlsSecret(map[string]string{annotations.Enabled: "true"}, certPEM, keyPEM)
+	secret.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "cert-manager.io/v1",
+		Kind:       "Certificate",
+		Name:       "my-cert",
+	}}
+	require.NoError(t, fakeClient.Create(context.Background(), secret))
+
+	_, err := r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+
+	// Secret must have the recovered ARN written back.
+	var updatedSecret corev1.Secret
+	require.NoError(t, fakeClient.Get(context.Background(),
+		k8stypes.NamespacedName{Name: "s", Namespace: "default"}, &updatedSecret))
+	assert.Equal(t, existingARN, updatedSecret.Annotations[annotations.ARN])
+
+	// Certificate must still carry the ARN (write-back confirmed).
+	var updatedCert unstructured.Unstructured
+	updatedCert.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
+	require.NoError(t, fakeClient.Get(context.Background(),
+		k8stypes.NamespacedName{Name: "my-cert", Namespace: "default"}, &updatedCert))
+	assert.Equal(t, existingARN, updatedCert.GetAnnotations()[annotations.ARN])
+
+	// Must have reimported to the SAME ARN, not created a fresh certificate.
+	m.AssertCalled(t, "ImportCertificate", mock.Anything, mock.MatchedBy(func(in *awsacm.ImportCertificateInput) bool {
+		return aws.ToString(in.CertificateArn) == existingARN
+	}))
+	m.AssertNotCalled(t, "ImportCertificate", mock.Anything, mock.MatchedBy(func(in *awsacm.ImportCertificateInput) bool {
+		return in.CertificateArn == nil
+	}))
 }

@@ -3,12 +3,15 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsacm "github.com/aws/aws-sdk-go-v2/service/acm"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -32,9 +35,33 @@ type ACMPool interface {
 // certificate ARN across renewals.
 type SecretReconciler struct {
 	client.Client
+	// Reader is used for direct API-server reads (bypassing the cache) for
+	// object types not registered in the manager scheme, e.g. cert-manager
+	// Certificate resources. Set automatically by SetupWithManager; tests may
+	// override it with a fake client.
+	Reader        client.Reader
 	Recorder      record.EventRecorder
 	ACMPool       ACMPool
 	DefaultRegion string
+}
+
+var certGVK = schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"}
+
+// findCertificateOwner returns the cert-manager Certificate that owns the
+// Secret (via ownerReferences), or nil if none is found.
+func (r *SecretReconciler) findCertificateOwner(ctx context.Context, secret *corev1.Secret) *unstructured.Unstructured {
+	for _, ref := range secret.OwnerReferences {
+		if ref.Kind != "Certificate" || !strings.HasPrefix(ref.APIVersion, "cert-manager.io/") {
+			continue
+		}
+		cert := &unstructured.Unstructured{}
+		cert.SetGroupVersionKind(certGVK)
+		if err := r.Reader.Get(ctx, client.ObjectKey{Namespace: secret.Namespace, Name: ref.Name}, cert); err != nil {
+			return nil
+		}
+		return cert
+	}
+	return nil
 }
 
 const (
@@ -80,6 +107,17 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	existingARN := annotations.GetARN(secret.Annotations)
 	existingFP := annotations.GetFingerprint(secret.Annotations)
+
+	// If the Secret was deleted and recreated by cert-manager, it loses the
+	// ACM ARN annotation. Recover it from the owning Certificate resource so
+	// we reimport to the same ARN instead of creating a new certificate.
+	certOwner := r.findCertificateOwner(ctx, &secret)
+	if existingARN == "" && certOwner != nil {
+		if recovered := certOwner.GetAnnotations()[annotations.ARN]; recovered != "" {
+			logger.Info("recovered ARN from Certificate owner", "arn", recovered)
+			existingARN = recovered
+		}
+	}
 
 	// If we have a stored ARN, verify the certificate still exists in ACM.
 	// This handles the case where a cert was deleted from ACM externally.
@@ -160,6 +198,22 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
+	// Mirror the ARN onto the owning Certificate so it survives Secret
+	// deletion and can be recovered on the next reconcile.
+	if certOwner != nil {
+		certPatch := certOwner.DeepCopy()
+		certAnns := certOwner.GetAnnotations()
+		if certAnns == nil {
+			certAnns = map[string]string{}
+		}
+		certAnns[annotations.ARN] = newARN
+		certOwner.SetAnnotations(certAnns)
+		if err := r.Patch(ctx, certOwner, client.MergeFrom(certPatch)); err != nil {
+			logger.Error(err, "imported to ACM but failed to patch Certificate with ARN",
+				"arn", newARN)
+		}
+	}
+
 	r.recorder().Event(&secret, corev1.EventTypeNormal, "Synced",
 		fmt.Sprintf("Certificate synced to ACM (action=%s, arn=%s, region=%s)", action, newARN, region))
 	metrics.SyncTotal.WithLabelValues(region, action).Inc()
@@ -174,6 +228,9 @@ func (r *SecretReconciler) recorder() record.EventRecorder {
 }
 
 func (r *SecretReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.Reader == nil {
+		r.Reader = mgr.GetAPIReader()
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Secret{},
 			builder.WithPredicates(TLSAnnotatedPredicate{}),
