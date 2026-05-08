@@ -267,6 +267,7 @@ docker compose run --rm \
 | `rbac.create` | `true` | Create RBAC resources |
 | `rbac.clusterScoped` | `true` | `true` = ClusterRole (all namespaces), `false` = Role (release namespace only) |
 | `podDisruptionBudget.enabled` | `true` | Create a PodDisruptionBudget |
+| `certificates` | `[]` | cert-manager `Certificate` resources to create alongside the controller |
 
 ## Observability
 
