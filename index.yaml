@@ -14,6 +14,41 @@ entries:
       artifacthub.io/operator: "true"
       artifacthub.io/operatorCapabilities: Basic Install
     apiVersion: v2
+    appVersion: 0.1.1
+    created: "2026-05-08T09:30:34.41375705Z"
+    description: Kubernetes controller that syncs cert-manager TLS Secrets to AWS
+      ACM, with automatic renewal support.
+    digest: dd4d8b0fed88f4ece9c3551a4143ccd3a5b98bc94c020a13c04ace40df783f14
+    home: https://github.com/camilorivera/cert-manager-acm-sync
+    keywords:
+    - cert-manager
+    - acm
+    - tls
+    - certificates
+    - aws
+    maintainers:
+    - email: camilo@riverapineda.com
+      name: Camilo Rivera
+    name: cert-manager-acm-sync
+    sources:
+    - https://github.com/camilorivera/cert-manager-acm-sync
+    type: application
+    urls:
+    - https://github.com/camilorivera/cert-manager-acm-sync/releases/download/cert-manager-acm-sync-0.1.1/cert-manager-acm-sync-0.1.1.tgz
+    version: 0.1.1
+  - annotations:
+      artifacthub.io/changes: |
+        - kind: added
+          description: Initial release — sync cert-manager TLS Secrets to AWS ACM with automatic renewal
+      artifacthub.io/license: Apache-2.0
+      artifacthub.io/links: |
+        - name: Source Code
+          url: https://github.com/camilorivera/cert-manager-acm-sync
+        - name: Documentation
+          url: https://github.com/camilorivera/cert-manager-acm-sync#readme
+      artifacthub.io/operator: "true"
+      artifacthub.io/operatorCapabilities: Basic Install
+    apiVersion: v2
     appVersion: 0.1.0
     created: "2026-05-08T08:49:23.088325921Z"
     description: Kubernetes controller that syncs cert-manager TLS Secrets to AWS
@@ -36,4 +71,4 @@ entries:
     urls:
     - https://github.com/camilorivera/cert-manager-acm-sync/releases/download/cert-manager-acm-sync-0.1.0/cert-manager-acm-sync-0.1.0.tgz
     version: 0.1.0
-generated: "2026-05-08T08:49:23.088331782Z"
+generated: "2026-05-08T09:30:34.413769349Z"
