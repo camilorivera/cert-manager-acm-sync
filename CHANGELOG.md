@@ -1,3 +1,10 @@
+## [0.6.1](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.6.0...v0.6.1) (2026-05-08)
+
+
+### Bug Fixes
+
+* add cert-manager.io/certificates RBAC to Helm chart ClusterRole/Role ([f70133c](https://github.com/camilorivera/cert-manager-acm-sync/commit/f70133cf62ee21746e7435cec1abcf4e57496189))
+
 # [0.6.0](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.5.1...v0.6.0) (2026-05-08)
 
 
