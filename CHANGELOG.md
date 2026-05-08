@@ -1,3 +1,10 @@
+# [0.4.0](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.3.1...v0.4.0) (2026-05-08)
+
+
+### Features
+
+* **helm:** add certificates list to values for cert-manager Certificate resources ([d31e2e7](https://github.com/camilorivera/cert-manager-acm-sync/commit/d31e2e75a7674af42a6b61d37ef44bcede847a7a))
+
 ## [0.3.1](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.3.0...v0.3.1) (2026-05-08)
 
 
