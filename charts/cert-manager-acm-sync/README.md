@@ -12,6 +12,18 @@ A Kubernetes controller that automatically syncs TLS certificates issued by [cer
 6. On every reconcile (including skips), if the owning `Certificate` is missing the `acm.sync/arn` annotation, the controller backfills it — so existing certificates are covered automatically after a controller upgrade.
 7. If the ACM certificate is deleted externally, the controller detects the stale ARN and creates a new certificate.
 
+## Prerequisites
+
+cert-manager must be running in the cluster before installing this chart. If you haven't installed it yet, follow the [official cert-manager installation guide](https://cert-manager.io/docs/installation/):
+
+```bash
+helm repo add jetstack https://charts.jetstack.io --force-update
+helm install cert-manager jetstack/cert-manager \
+  --namespace cert-manager \
+  --create-namespace \
+  --set installCRDs=true
+```
+
 ## Installation
 
 ```bash

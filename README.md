@@ -39,7 +39,20 @@ cert-manager ──► kubernetes.io/tls Secret ──► cert-manager-acm-sync 
 
 ## Quick Start
 
-### 1. Install the controller
+### 1. Install cert-manager
+
+cert-manager must be running in the cluster before installing this controller. If you haven't installed it yet, follow the [official cert-manager installation guide](https://cert-manager.io/docs/installation/).
+
+```bash
+# Helm (recommended)
+helm repo add jetstack https://charts.jetstack.io --force-update
+helm install cert-manager jetstack/cert-manager \
+  --namespace cert-manager \
+  --create-namespace \
+  --set installCRDs=true
+```
+
+### 2. Install the controller
 
 ```bash
 helm install cert-manager-acm-sync oci://ghcr.io/camilorivera/charts/cert-manager-acm-sync \
@@ -204,7 +217,7 @@ certificates:
       #   size: 2048
 ```
 
-> cert-manager must be installed in the cluster before enabling this feature.
+> cert-manager must be installed before using this feature. See step 1 of the Quick Start above.
 
 ## Development
 
