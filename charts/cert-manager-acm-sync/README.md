@@ -39,6 +39,8 @@ See [releases](https://github.com/camilorivera/cert-manager-acm-sync/releases) f
 
 ### Annotate the Certificate resource (recommended)
 
+Add `acm.sync/enabled: "true"` directly to the `Certificate` resource. This is the preferred approach — the annotation lives on the resource that represents your intent, not on the Secret:
+
 ```yaml
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -57,24 +59,21 @@ spec:
     kind: ClusterIssuer
 ```
 
-Annotating the `Certificate` directly is preferred — the annotation stays on the resource that represents your intent, not on the Secret. The `secretTemplate.annotations` approach still works for backward compatibility.
-
-### Via Helm values (creates the Certificate alongside the controller)
+### Via Helm values
 
 ```yaml
 certificates:
   - name: my-service-tls
     spec:
       secretName: my-service-tls
-      secretTemplate:
-        annotations:
-          acm.sync/enabled: "true"
       dnsNames:
         - my-service.example.com
       issuerRef:
         name: letsencrypt-prod
         kind: ClusterIssuer
 ```
+
+> To enable ACM sync, add `acm.sync/enabled: "true"` to `metadata.annotations` in the certificate entry.
 
 ## IAM Permissions
 

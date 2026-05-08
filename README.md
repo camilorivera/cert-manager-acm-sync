@@ -54,40 +54,9 @@ See [releases](https://github.com/camilorivera/cert-manager-acm-sync/releases) f
 
 ### 2. Define your certificates
 
-**Option A — via Helm values (recommended):**
+**Option A — annotate the cert-manager Certificate (recommended):**
 
-Declare `Certificate` resources directly in your `values.yaml`. The Helm chart creates them for you alongside the controller:
-
-```yaml
-certificates:
-  - name: my-service-tls
-    spec:
-      secretName: my-service-tls
-      secretTemplate:
-        annotations:
-          acm.sync/enabled: "true"
-      dnsNames:
-        - my-service.example.com
-      issuerRef:
-        name: letsencrypt-prod
-        kind: ClusterIssuer
-
-  # CloudFront certificate — must be in us-east-1
-  - name: my-cdn-tls
-    spec:
-      secretName: my-cdn-tls
-      secretTemplate:
-        annotations:
-          acm.sync/enabled: "true"
-          acm.sync/region: "us-east-1"
-      dnsNames:
-        - cdn.example.com
-      issuerRef:
-        name: letsencrypt-prod
-        kind: ClusterIssuer
-```
-
-**Option B — annotate an existing cert-manager Certificate:**
+Add `acm.sync/enabled: "true"` directly to the `Certificate` resource. This is the preferred approach — the annotation lives on the resource that represents your intent, not on the Secret (which is just a data store):
 
 ```yaml
 apiVersion: cert-manager.io/v1
@@ -107,7 +76,23 @@ spec:
     kind: ClusterIssuer
 ```
 
-Annotating the `Certificate` directly is preferred — the annotation stays on the resource that represents your intent, not on the Secret (which is a data store). The `secretTemplate` approach still works for backward compatibility.
+**Option B — via Helm values:**
+
+Declare `Certificate` resources in your `values.yaml`. The Helm chart creates them alongside the controller:
+
+```yaml
+certificates:
+  - name: my-service-tls
+    spec:
+      secretName: my-service-tls
+      dnsNames:
+        - my-service.example.com
+      issuerRef:
+        name: letsencrypt-prod
+        kind: ClusterIssuer
+```
+
+> To enable ACM sync, add `acm.sync/enabled: "true"` to `metadata.annotations` in the certificate entry.
 
 **Option C — annotate an existing TLS Secret directly (no cert-manager required):**
 
@@ -193,18 +178,19 @@ kubectl get secret my-service-tls -o jsonpath='{.metadata.annotations}' | jq
 
 ### certificates
 
-Each entry in the `certificates` list renders a full cert-manager `Certificate` resource. The `namespace` field is optional and defaults to the release namespace. The `spec` is passed through as-is, so all cert-manager Certificate spec fields are supported.
+Each entry in the `certificates` list renders a full cert-manager `Certificate` resource. The `namespace` field is optional and defaults to the release namespace. Both `metadata` and `spec` are passed through as-is, so all cert-manager Certificate fields are supported.
+
+Put `acm.sync/enabled` in `metadata.annotations` (not `secretTemplate`) — that is the preferred pattern:
 
 ```yaml
 certificates:
   - name: my-service-tls
     namespace: default       # optional, defaults to release namespace
+    annotations:
+      acm.sync/enabled: "true"
+      # acm.sync/region: "us-east-1"  # required for CloudFront
     spec:
       secretName: my-service-tls
-      secretTemplate:
-        annotations:
-          acm.sync/enabled: "true"
-          # acm.sync/region: "us-east-1"  # required for CloudFront
       dnsNames:
         - my-service.example.com
       issuerRef:
