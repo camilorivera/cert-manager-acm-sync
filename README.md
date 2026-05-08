@@ -195,6 +195,10 @@ All commands above run entirely inside containers — no Go, no linter, nothing 
 # Usage: make go CMD="<go subcommand and flags>"
 make go CMD="vet ./..."
 make go CMD="build -v ./cmd/manager"
+
+# Or directly with Docker Compose:
+docker compose run --rm dev go vet ./...
+docker compose run --rm dev go build -v ./cmd/manager
 ```
 
 ### Volumes and caching
