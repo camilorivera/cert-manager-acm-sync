@@ -1,3 +1,17 @@
+# [0.6.0](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.5.1...v0.6.0) (2026-05-08)
+
+
+### Bug Fixes
+
+* backfill acm.sync/arn onto Certificate on skip path for pre-existing certs ([cc25e21](https://github.com/camilorivera/cert-manager-acm-sync/commit/cc25e2157ebf485625df051767e5f28f027d3b50))
+* gofmt alignment in regionCapturingPool literal ([505a5f1](https://github.com/camilorivera/cert-manager-acm-sync/commit/505a5f11d3fdedaaa70ccd0fea6e433d76395646))
+
+
+### Features
+
+* support acm.sync annotations directly on cert-manager Certificate resource ([1f78aa7](https://github.com/camilorivera/cert-manager-acm-sync/commit/1f78aa7c9b15b4ac7241bd9967fd9ac6cd67c529))
+* support metadata.annotations in certificates Helm values ([d2f2fbe](https://github.com/camilorivera/cert-manager-acm-sync/commit/d2f2fbee4bbd5ab45025a6405e21f3208deae1f6))
+
 ## [0.5.1](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.5.0...v0.5.1) (2026-05-08)
 
 # [0.5.0](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.4.1...v0.5.0) (2026-05-08)
