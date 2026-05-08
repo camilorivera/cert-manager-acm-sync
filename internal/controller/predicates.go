@@ -65,12 +65,8 @@ func (TLSAnnotatedPredicate) Update(e event.UpdateEvent) bool {
 	// Only acm.sync/* annotations changed (our own write-back) → suppress
 	oldFiltered := annotations.StripACMAnnotations(oldS.Annotations)
 	newFiltered := annotations.StripACMAnnotations(newS.Annotations)
-	if reflect.DeepEqual(oldFiltered, newFiltered) {
-		return false
-	}
-
-	return true
+	return !reflect.DeepEqual(oldFiltered, newFiltered)
 }
 
-func (TLSAnnotatedPredicate) Delete(_ event.DeleteEvent) bool  { return false }
+func (TLSAnnotatedPredicate) Delete(_ event.DeleteEvent) bool { return false }
 func (TLSAnnotatedPredicate) Generic(_ event.GenericEvent) bool { return false }
