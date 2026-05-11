@@ -1,23 +1,26 @@
+version: "2"
+
 linters:
   enable:
     - errcheck
-    - gosimple
     - govet
     - ineffassign
     - staticcheck
     - unused
-    - gofmt
-    - goimports
     - misspell
     - unconvert
     - unparam
 
-linters-settings:
-  goimports:
-    local-prefixes: github.com/camilorivera/cert-manager-acm-sync
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/camilorivera/cert-manager-acm-sync
 
 issues:
   exclude-rules:
-    # Allow dot imports in test files (common in controller tests)
     - path: _test\.go
       linters: [revive]

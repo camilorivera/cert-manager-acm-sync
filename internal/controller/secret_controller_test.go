@@ -92,7 +92,7 @@ func TestReconcile_SecretWithoutAnnotation_SkipsACM(t *testing.T) {
 	m := &acmclient.MockACMAPI{}
 	r, _ := buildReconciler(t, m)
 
-	require.NoError(t, r.Client.Create(context.Background(),
+	require.NoError(t, r.Create(context.Background(),
 		tlsSecret(nil, certPEM, keyPEM)))
 
 	_, err := r.Reconcile(context.Background(), nn())
@@ -111,14 +111,14 @@ func TestReconcile_FirstImport_WritesARNAnnotation(t *testing.T) {
 	})).Return(&awsacm.ImportCertificateOutput{CertificateArn: aws.String(arn)}, nil)
 
 	r, recorder := buildReconciler(t, m)
-	require.NoError(t, r.Client.Create(context.Background(),
+	require.NoError(t, r.Create(context.Background(),
 		tlsSecret(map[string]string{annotations.Enabled: "true"}, certPEM, keyPEM)))
 
 	_, err := r.Reconcile(context.Background(), nn())
 	require.NoError(t, err)
 
 	var updated corev1.Secret
-	require.NoError(t, r.Client.Get(context.Background(),
+	require.NoError(t, r.Get(context.Background(),
 		k8stypes.NamespacedName{Name: "s", Namespace: "default"}, &updated))
 	assert.Equal(t, arn, updated.Annotations[annotations.ARN])
 	assert.NotEmpty(t, updated.Annotations[annotations.Fingerprint])
@@ -141,7 +141,7 @@ func TestReconcile_FingerprintMatch_SkipsImport(t *testing.T) {
 		}, nil)
 
 	r, _ := buildReconciler(t, m)
-	require.NoError(t, r.Client.Create(context.Background(),
+	require.NoError(t, r.Create(context.Background(),
 		tlsSecret(map[string]string{
 			annotations.Enabled:     "true",
 			annotations.ARN:         arn,
@@ -167,7 +167,7 @@ func TestReconcile_StaleARN_CreatesNewCertificate(t *testing.T) {
 	})).Return(&awsacm.ImportCertificateOutput{CertificateArn: aws.String(newARN)}, nil)
 
 	r, recorder := buildReconciler(t, m)
-	require.NoError(t, r.Client.Create(context.Background(),
+	require.NoError(t, r.Create(context.Background(),
 		tlsSecret(map[string]string{
 			annotations.Enabled:     "true",
 			annotations.ARN:         staleARN,
@@ -178,7 +178,7 @@ func TestReconcile_StaleARN_CreatesNewCertificate(t *testing.T) {
 	require.NoError(t, err)
 
 	var updated corev1.Secret
-	require.NoError(t, r.Client.Get(context.Background(),
+	require.NoError(t, r.Get(context.Background(),
 		k8stypes.NamespacedName{Name: "s", Namespace: "default"}, &updated))
 	assert.Equal(t, newARN, updated.Annotations[annotations.ARN])
 
@@ -202,7 +202,7 @@ func TestReconcile_Renewal_ReimportsWithSameARN(t *testing.T) {
 	})).Return(&awsacm.ImportCertificateOutput{CertificateArn: aws.String(arn)}, nil)
 
 	r, _ := buildReconciler(t, m)
-	require.NoError(t, r.Client.Create(context.Background(),
+	require.NoError(t, r.Create(context.Background(),
 		tlsSecret(map[string]string{
 			annotations.Enabled:     "true",
 			annotations.ARN:         arn,
@@ -213,7 +213,7 @@ func TestReconcile_Renewal_ReimportsWithSameARN(t *testing.T) {
 	require.NoError(t, err)
 
 	var updated corev1.Secret
-	require.NoError(t, r.Client.Get(context.Background(),
+	require.NoError(t, r.Get(context.Background(),
 		k8stypes.NamespacedName{Name: "s", Namespace: "default"}, &updated))
 	assert.Equal(t, arn, updated.Annotations[annotations.ARN], "ARN must not change on renewal")
 }

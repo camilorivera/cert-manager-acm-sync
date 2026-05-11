@@ -11,7 +11,7 @@ services:
       - CGO_ENABLED=0
 
   lint:
-    image: golangci/golangci-lint:v1.61
+    image: golangci/golangci-lint:v2.12.2
     working_dir: /workspace
     volumes:
       - .:/workspace
