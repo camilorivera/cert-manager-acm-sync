@@ -1,3 +1,14 @@
+## [0.6.2](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.6.1...v0.6.2) (2026-05-11)
+
+
+### Bug Fixes
+
+* correct trivy-action version tag to v0.36.0 ([e95eb90](https://github.com/camilorivera/cert-manager-acm-sync/commit/e95eb903ca93049f3b96d21a8685ffd4b35ec07c))
+* remove invalid issues.exclude-rules from golangci-lint v2 config ([eed8841](https://github.com/camilorivera/cert-manager-acm-sync/commit/eed8841e370ecc11391d7c3f9a30a8971f1ad026))
+* upgrade Go to 1.25 and oauth2 to v0.27.0 to resolve Trivy CVEs ([4530b1b](https://github.com/camilorivera/cert-manager-acm-sync/commit/4530b1b26e9cdf3c4ef83a46d81b1429dcd3e627))
+* upgrade golangci-lint to v2.12.2 and fix Go 1.25 compatibility ([5d1f97a](https://github.com/camilorivera/cert-manager-acm-sync/commit/5d1f97a183e1ba256611802af3704a52c2a1f11b))
+* upgrade golangci-lint-action to v7 for golangci-lint v2 support ([9d58c1d](https://github.com/camilorivera/cert-manager-acm-sync/commit/9d58c1d824eacc64bb0f672e03fde5bf7879e4c6))
+
 ## [0.6.1](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.6.0...v0.6.1) (2026-05-08)
 
 
