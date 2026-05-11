@@ -20,7 +20,3 @@ formatters:
       local-prefixes:
         - github.com/camilorivera/cert-manager-acm-sync
 
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters: [revive]
