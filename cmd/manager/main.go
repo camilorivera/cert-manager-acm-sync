@@ -106,7 +106,7 @@ func main() {
 
 	if err := (&controller.SecretReconciler{
 		Client:           mgr.GetClient(),
-		Recorder:         mgr.GetEventRecorderFor("cert-manager-acm-sync"), //nolint:staticcheck
+		Recorder:         mgr.GetEventRecorder("cert-manager-acm-sync"),
 		ACMPool:          acmclient.NewPool(awsCfg),
 		DefaultRegion:    defaultRegion,
 		CloudFrontClient: cfClient,

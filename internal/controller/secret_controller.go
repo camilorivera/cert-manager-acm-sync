@@ -15,7 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -46,7 +46,7 @@ type SecretReconciler struct {
 	// Certificate resources. Set automatically by SetupWithManager; tests may
 	// override it with a fake client.
 	Reader        client.Reader
-	Recorder      record.EventRecorder
+	Recorder      events.EventRecorder
 	ACMPool       ACMPool
 	DefaultRegion string
 	// CloudFrontClient is optional. When nil (default), CloudFront sync is
@@ -123,14 +123,14 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	certPEM := secret.Data["tls.crt"]
 	keyPEM := secret.Data["tls.key"]
 	if len(certPEM) == 0 || len(keyPEM) == 0 {
-		r.recorder().Event(&secret, corev1.EventTypeWarning, "MissingData",
-			"tls.crt or tls.key is absent; will retry")
+		r.Recorder.Eventf(&secret, nil, corev1.EventTypeWarning, "MissingData",
+			"Reconciling", "tls.crt or tls.key is absent; will retry")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	currentFP, err := fingerprint.Compute(certPEM)
 	if err != nil {
-		r.recorder().Event(&secret, corev1.EventTypeWarning, "FingerprintError", err.Error())
+		r.Recorder.Eventf(&secret, nil, corev1.EventTypeWarning, "FingerprintError", "Reconciling", err.Error())
 		return ctrl.Result{}, err
 	}
 
@@ -168,8 +168,8 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			if acmclient.IsNotFound(err) {
 				logger.Info("ACM certificate not found; will create a new one",
 					"previousARN", existingARN)
-				r.recorder().Event(&secret, corev1.EventTypeWarning, "CertificateNotFound",
-					fmt.Sprintf("ACM certificate %s not found; creating a new certificate", existingARN))
+				r.Recorder.Eventf(&secret, nil, corev1.EventTypeWarning, "CertificateNotFound",
+					"Reconciling", "ACM certificate %s not found; creating a new certificate", existingARN)
 				existingARN = "" // treat as first import
 			} else {
 				metrics.SyncErrorsTotal.WithLabelValues(region, "describe").Inc()
@@ -227,7 +227,7 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	result, err := acmclient.ImportWithRetry(ctx, acmClient, input)
 	if err != nil {
 		metrics.SyncErrorsTotal.WithLabelValues(region, action).Inc()
-		r.recorder().Event(&secret, corev1.EventTypeWarning, "SyncFailed", err.Error())
+		r.Recorder.Eventf(&secret, nil, corev1.EventTypeWarning, "SyncFailed", "Importing", err.Error())
 		return ctrl.Result{}, fmt.Errorf("ImportCertificate (%s): %w", action, err)
 	}
 
@@ -268,8 +268,8 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	r.recorder().Event(&secret, corev1.EventTypeNormal, "Synced",
-		fmt.Sprintf("Certificate synced to ACM (action=%s, arn=%s, region=%s)", action, newARN, region))
+	r.Recorder.Eventf(&secret, nil, corev1.EventTypeNormal, "Synced", "Importing",
+		"Certificate synced to ACM (action=%s, arn=%s, region=%s)", action, newARN, region)
 	metrics.SyncTotal.WithLabelValues(region, action).Inc()
 	metrics.LastSyncTimestamp.WithLabelValues(region, req.NamespacedName.String()).SetToCurrentTime()
 
@@ -304,8 +304,8 @@ func (r *SecretReconciler) maybeSyncCloudFront(
 	if err != nil {
 		metrics.CloudFrontSyncErrorsTotal.WithLabelValues("extract_sans").Inc()
 		logger.Error(err, "cloudfront sync: failed to extract SANs")
-		r.recorder().Event(secret, corev1.EventTypeWarning, "CloudFrontSyncFailed",
-			fmt.Sprintf("failed to extract SANs for CloudFront sync: %v", err))
+		r.Recorder.Eventf(secret, nil, corev1.EventTypeWarning, "CloudFrontSyncFailed",
+			"SyncingCloudFront", "failed to extract SANs for CloudFront sync: %v", err)
 		return
 	}
 
@@ -319,18 +319,14 @@ func (r *SecretReconciler) maybeSyncCloudFront(
 		metrics.CloudFrontSyncErrorsTotal.WithLabelValues(errType).Inc()
 		logger.Error(err, "cloudfront sync failed; ACM import succeeded",
 			"distributionARN", distARN, "acmCertARN", acmCertARN)
-		r.recorder().Event(secret, corev1.EventTypeWarning, "CloudFrontSyncFailed", err.Error())
+		r.Recorder.Eventf(secret, nil, corev1.EventTypeWarning, "CloudFrontSyncFailed", "SyncingCloudFront", err.Error())
 		return
 	}
 
 	metrics.CloudFrontSyncTotal.WithLabelValues("synced").Inc()
 	logger.Info("cloudfront sync complete", "distributionARN", distARN, "acmCertARN", acmCertARN, "sans", sans)
-	r.recorder().Event(secret, corev1.EventTypeNormal, "CloudFrontSynced",
-		fmt.Sprintf("CloudFront distribution %s updated (acmCertARN=%s)", distARN, acmCertARN))
-}
-
-func (r *SecretReconciler) recorder() record.EventRecorder {
-	return r.Recorder
+	r.Recorder.Eventf(secret, nil, corev1.EventTypeNormal, "CloudFrontSynced",
+		"SyncingCloudFront", "CloudFront distribution %s updated (acmCertARN=%s)", distARN, acmCertARN)
 }
 
 func (r *SecretReconciler) SetupWithManager(mgr ctrl.Manager) error {
