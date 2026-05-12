@@ -114,5 +114,9 @@ jobs:
       - name: Package and push chart
         run: |
           helm package charts/cert-manager-acm-sync
-          helm push cert-manager-acm-sync-${{ needs.release.outputs.version }}.tgz \
-            oci://ghcr.io/${{ github.repository_owner }}/charts
+          for i in 1 2 3 4 5; do
+            helm push cert-manager-acm-sync-${{ needs.release.outputs.version }}.tgz \
+              oci://ghcr.io/${{ github.repository_owner }}/charts && break
+            echo "Attempt $i failed, retrying in $((i * 10))s..."
+            sleep $((i * 10))
+          done
