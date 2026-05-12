@@ -1,3 +1,10 @@
+## [0.7.2](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.7.1...v0.7.2) (2026-05-12)
+
+
+### Bug Fixes
+
+* add events.k8s.io RBAC permission to ClusterRole and Role ([9d1eddd](https://github.com/camilorivera/cert-manager-acm-sync/commit/9d1eddda1bf734a5b9607891d3638ef0f404d8ac))
+
 ## [0.7.1](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.7.0...v0.7.1) (2026-05-12)
 
 
