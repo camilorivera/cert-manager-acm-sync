@@ -37,6 +37,9 @@ spec:
             {{- if not .Values.rbac.clusterScoped }}
             - "--namespace={{ .Release.Namespace }}"
             {{- end }}
+            {{- if .Values.controller.enableCloudfrontSync }}
+            - "--enable-cloudfront-sync"
+            {{- end }}
           env:
             - name: AWS_REGION
               value: {{ .Values.controller.defaultRegion | quote }}

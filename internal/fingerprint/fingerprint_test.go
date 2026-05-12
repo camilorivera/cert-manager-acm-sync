@@ -19,6 +19,11 @@ import (
 
 func generateCert(t *testing.T) []byte {
 	t.Helper()
+	return generateCertWithSANs(t, nil)
+}
+
+func generateCertWithSANs(t *testing.T, dnsNames []string) []byte {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 
@@ -27,6 +32,7 @@ func generateCert(t *testing.T) []byte {
 		Subject:      pkix.Name{CommonName: "test.example.com"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
+		DNSNames:     dnsNames,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	require.NoError(t, err)
@@ -90,6 +96,34 @@ func TestSplitChain_SingleCert(t *testing.T) {
 	leaf, chain := fingerprint.SplitChain(certPEM)
 	assert.NotEmpty(t, leaf)
 	assert.Empty(t, chain)
+}
+
+func TestExtractSANs_WithDNSNames(t *testing.T) {
+	certPEM := generateCertWithSANs(t, []string{"example.com", "www.example.com"})
+	sans, err := fingerprint.ExtractSANs(certPEM)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"example.com", "www.example.com"}, sans)
+}
+
+func TestExtractSANs_FallbackToCommonName(t *testing.T) {
+	certPEM := generateCertWithSANs(t, nil) // no SANs, only CN
+	sans, err := fingerprint.ExtractSANs(certPEM)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"test.example.com"}, sans)
+}
+
+func TestExtractSANs_LeafOnlyFromChain(t *testing.T) {
+	leaf := generateCertWithSANs(t, []string{"leaf.example.com"})
+	intermediate := generateCertWithSANs(t, []string{"intermediate.example.com"})
+	chain := append(leaf, intermediate...)
+	sans, err := fingerprint.ExtractSANs(chain)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"leaf.example.com"}, sans)
+}
+
+func TestExtractSANs_EmptyInput(t *testing.T) {
+	_, err := fingerprint.ExtractSANs([]byte{})
+	assert.Error(t, err)
 }
 
 func TestSplitChain_FullChain(t *testing.T) {

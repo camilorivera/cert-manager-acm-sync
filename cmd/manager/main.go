@@ -18,6 +18,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	acmclient "github.com/camilorivera/cert-manager-acm-sync/internal/acm"
+	cloudfrontclient "github.com/camilorivera/cert-manager-acm-sync/internal/cloudfront"
 	"github.com/camilorivera/cert-manager-acm-sync/internal/controller"
 	_ "github.com/camilorivera/cert-manager-acm-sync/internal/metrics" // register Prometheus metrics
 )
@@ -31,12 +32,13 @@ func init() {
 
 func main() {
 	var (
-		defaultRegion   string
-		namespace       string
-		leaderElect     bool
-		metricsAddr     string
-		healthProbeAddr string
-		leaderElectID   string
+		defaultRegion        string
+		namespace            string
+		leaderElect          bool
+		metricsAddr          string
+		healthProbeAddr      string
+		leaderElectID        string
+		enableCloudFrontSync bool
 	)
 
 	flag.StringVar(&defaultRegion, "default-region", "us-east-1",
@@ -51,6 +53,9 @@ func main() {
 		"Address the health probe endpoint binds to.")
 	flag.StringVar(&leaderElectID, "leader-election-id", "cert-manager-acm-sync.acm.sync",
 		"Name of the Lease resource used for leader election.")
+	flag.BoolVar(&enableCloudFrontSync, "enable-cloudfront-sync", false,
+		"Enable automatic CloudFront distribution alias sync after ACM imports. "+
+			"Requires cloudfront:GetDistributionConfig and cloudfront:UpdateDistribution IAM permissions.")
 
 	opts := zap.Options{
 		Development: false,
@@ -93,11 +98,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	var cfClient cloudfrontclient.CloudFrontAPI
+	if enableCloudFrontSync {
+		cfClient = cloudfrontclient.NewClient(awsCfg)
+		setupLog.Info("CloudFront sync enabled")
+	}
+
 	if err := (&controller.SecretReconciler{
-		Client:        mgr.GetClient(),
-		Recorder:      mgr.GetEventRecorderFor("cert-manager-acm-sync"), //nolint:staticcheck
-		ACMPool:       acmclient.NewPool(awsCfg),
-		DefaultRegion: defaultRegion,
+		Client:           mgr.GetClient(),
+		Recorder:         mgr.GetEventRecorderFor("cert-manager-acm-sync"), //nolint:staticcheck
+		ACMPool:          acmclient.NewPool(awsCfg),
+		DefaultRegion:    defaultRegion,
+		CloudFrontClient: cfClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller")
 		os.Exit(1)
