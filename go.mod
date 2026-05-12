@@ -6,7 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.32.4
 	github.com/aws/aws-sdk-go-v2/config v1.28.3
 	github.com/aws/aws-sdk-go-v2/service/acm v1.30.3
-	github.com/aws/smithy-go v1.22.0
+	github.com/aws/smithy-go v1.25.1
 	github.com/prometheus/client_golang v1.20.4
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/zap v1.27.0
