@@ -1,3 +1,10 @@
+## [0.7.1](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.7.0...v0.7.1) (2026-05-12)
+
+
+### Bug Fixes
+
+* retry CloudFront sync on InvalidViewerCertificate after ACM import ([ac3a6b5](https://github.com/camilorivera/cert-manager-acm-sync/commit/ac3a6b594ff1438987f6e2ce791d2fe917d777e3))
+
 # [0.7.0](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.6.3...v0.7.0) (2026-05-12)
 
 
