@@ -20,8 +20,21 @@ var (
 		Name: "acm_sync_last_sync_timestamp",
 		Help: "Unix timestamp of the last successful sync per secret.",
 	}, []string{"region", "secret"})
+
+	CloudFrontSyncTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloudfront_sync_total",
+		Help: "Total number of CloudFront distribution sync operations.",
+	}, []string{"action"})
+
+	CloudFrontSyncErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloudfront_sync_errors_total",
+		Help: "Total number of CloudFront distribution sync errors.",
+	}, []string{"error_type"})
 )
 
 func init() {
-	metrics.Registry.MustRegister(SyncTotal, SyncErrorsTotal, LastSyncTimestamp)
+	metrics.Registry.MustRegister(
+		SyncTotal, SyncErrorsTotal, LastSyncTimestamp,
+		CloudFrontSyncTotal, CloudFrontSyncErrorsTotal,
+	)
 }

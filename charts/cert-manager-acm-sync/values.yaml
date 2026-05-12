@@ -14,6 +14,9 @@ controller:
   # Override per-Secret with the acm.sync/region annotation.
   defaultRegion: us-east-1
   leaderElect: true
+  # Set to true to enable automatic CloudFront alias sync after each ACM import.
+  # Requires cloudfront:GetDistributionConfig and cloudfront:UpdateDistribution IAM permissions.
+  enableCloudfrontSync: false
 
 serviceAccount:
   create: true

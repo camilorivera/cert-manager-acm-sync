@@ -34,8 +34,57 @@ cert-manager ──► kubernetes.io/tls Secret ──► cert-manager-acm-sync 
 | `acm.sync/arn` | Controller | — | ACM certificate ARN, written after first import |
 | `acm.sync/fingerprint` | Controller | — | SHA-256 of the leaf cert's DER bytes, used for change detection |
 | `acm.sync/last-sync` | Controller | — | RFC3339 timestamp of the last successful sync |
+| `acm.sync/cloudfront-distribution-arn` | User | No | ARN of the CloudFront distribution to keep in sync. Requires `--enable-cloudfront-sync`. |
 
 > **CloudFront note:** CloudFront requires certificates in `us-east-1`. Set `acm.sync/region: "us-east-1"` on Secrets used by CloudFront distributions.
+
+## CloudFront Integration
+
+When `--enable-cloudfront-sync` is enabled and the `acm.sync/cloudfront-distribution-arn` annotation is set on a Secret or its owning Certificate, the controller automatically updates the CloudFront distribution after each ACM import:
+
+1. Reads the distribution config via `GetDistributionConfig`
+2. Sets the distribution's **Aliases** (alternative domain names) to the certificate's DNS SANs
+3. Associates the new **ACM certificate ARN** with the distribution via `UpdateDistribution`
+
+This keeps CloudFront aliases in sync with the domains in your cert automatically.
+
+### Requirements
+
+- The certificate must be in `us-east-1` (CloudFront's global certificate requirement). Add `acm.sync/region: "us-east-1"` to your annotation.
+- Enable the feature at the controller level: `--enable-cloudfront-sync` flag or `controller.enableCloudfrontSync: true` in Helm values.
+- Add two extra IAM permissions to the controller's IRSA role:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": ["cloudfront:GetDistributionConfig", "cloudfront:UpdateDistribution"],
+  "Resource": "*"
+}
+```
+
+### Example
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: my-cloudfront-cert
+  namespace: default
+  annotations:
+    acm.sync/enabled: "true"
+    acm.sync/region: "us-east-1"
+    acm.sync/cloudfront-distribution-arn: "arn:aws:cloudfront::123456789012:distribution/EDFDVBD6EXAMPLE"
+spec:
+  secretName: my-cloudfront-cert
+  dnsNames:
+    - example.com
+    - www.example.com
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+```
+
+CloudFront sync is **non-fatal**: a failure emits a `CloudFrontSyncFailed` warning event on the Secret and increments `cloudfront_sync_errors_total`, but the ACM import is still considered successful and the reconcile does not retry.
 
 ## Quick Start
 
@@ -183,6 +232,7 @@ kubectl get secret my-service-tls -o jsonpath='{.metadata.annotations}' | jq
 | `image.tag` | `""` | Defaults to the chart's `appVersion` |
 | `controller.defaultRegion` | `us-east-1` | Default AWS region |
 | `controller.leaderElect` | `true` | Enable leader election |
+| `controller.enableCloudfrontSync` | `false` | Enable CloudFront distribution alias sync after ACM imports |
 | `serviceAccount.annotations` | `{}` | Use to set the IRSA role ARN |
 | `rbac.create` | `true` | Create RBAC resources |
 | `rbac.clusterScoped` | `true` | `true` = ClusterRole (all namespaces), `false` = Role (release namespace only) |
@@ -338,6 +388,8 @@ Scraped from `:8080/metrics`:
 | `acm_sync_total` | Counter | `region`, `action` | Sync operations (`import` / `reimport` / `skipped`) |
 | `acm_sync_errors_total` | Counter | `region`, `action` | Failed sync operations |
 | `acm_sync_last_sync_timestamp` | Gauge | `region`, `secret` | Unix timestamp of last successful sync |
+| `cloudfront_sync_total` | Counter | `action` | CloudFront sync operations (`synced`) |
+| `cloudfront_sync_errors_total` | Counter | `error_type` | Failed CloudFront sync operations (`get_config` / `update` / `extract_id` / `extract_sans`) |
 
 ### Kubernetes Events
 
@@ -349,6 +401,8 @@ The controller emits events on each managed Secret:
 | `SyncFailed` | Warning | AWS API error during import |
 | `CertificateNotFound` | Warning | Stored ARN no longer exists in ACM; creating a new certificate |
 | `MissingData` | Warning | `tls.crt` or `tls.key` absent from Secret |
+| `CloudFrontSynced` | Normal | CloudFront distribution updated with new ACM cert ARN and aliases |
+| `CloudFrontSyncFailed` | Warning | CloudFront update failed (ACM import still succeeded) |
 
 ### Suggested alerts
 
@@ -385,16 +439,18 @@ The controller emits events on each managed Secret:
 │  │  4. DescribeCertificate → detect stale ARNs              │   │
 │  │  5. ImportCertificate (import / re-import / skip)        │   │
 │  │  6. Patch acm.sync/* annotations onto Secret + Certificate│   │
-│  │  7. Emit Events + Prometheus metrics                      │   │
+│  │  7. Optional: sync CloudFront aliases + cert ARN          │   │
+│  │  8. Emit Events + Prometheus metrics                      │   │
 │  └──────────────────────┬───────────────────────────────────┘   │
 │          ServiceAccount │ IRSA                                   │
 └─────────────────────────┼──────────────────────────────────────--┘
                           │
-                          ▼
-            ┌─────────────────────────┐
-            │  AWS ACM                │
-            │  (same ARN on renewal)  │
-            └─────────────────────────┘
+               ┌──────────┴──────────┐
+               ▼                     ▼
+  ┌─────────────────────────┐   ┌─────────────────────────┐
+  │  AWS ACM                │   │  AWS CloudFront          │
+  │  (same ARN on renewal)  │   │  (optional, non-fatal)   │
+  └─────────────────────────┘   └─────────────────────────┘
 ```
 
 ## Security

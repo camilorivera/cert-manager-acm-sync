@@ -46,6 +46,23 @@ See [releases](https://github.com/camilorivera/cert-manager-acm-sync/releases) f
 | `acm.sync/arn` | Controller | — | ACM certificate ARN, written after first import |
 | `acm.sync/fingerprint` | Controller | — | SHA-256 of the leaf cert's DER bytes, used for change detection |
 | `acm.sync/last-sync` | Controller | — | RFC3339 timestamp of the last successful sync |
+| `acm.sync/cloudfront-distribution-arn` | User | No | ARN of the CloudFront distribution to keep in sync. Requires `--enable-cloudfront-sync`. |
+
+## CloudFront Integration
+
+When `controller.enableCloudfrontSync: true` is set and `acm.sync/cloudfront-distribution-arn` is annotated on a Secret or Certificate, the controller automatically updates the CloudFront distribution after each ACM import: sets the Aliases to the certificate's DNS SANs and associates the ACM cert ARN.
+
+The certificate must be in `us-east-1`. Add these IAM permissions to the controller's IRSA role:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": ["cloudfront:GetDistributionConfig", "cloudfront:UpdateDistribution"],
+  "Resource": "*"
+}
+```
+
+CloudFront sync is **non-fatal**: failure emits a `CloudFrontSyncFailed` warning event but does not block the ACM import.
 
 ## Quick Start
 
@@ -118,6 +135,7 @@ certificates:
 | `image.tag` | `""` | Defaults to the chart's `appVersion` |
 | `controller.defaultRegion` | `us-east-1` | Default AWS region for ACM imports |
 | `controller.leaderElect` | `true` | Enable leader election |
+| `controller.enableCloudfrontSync` | `false` | Enable CloudFront distribution alias sync after ACM imports |
 | `serviceAccount.annotations` | `{}` | Use to set the IRSA role ARN |
 | `rbac.create` | `true` | Create RBAC resources |
 | `rbac.clusterScoped` | `true` | `true` = ClusterRole (all namespaces), `false` = Role (release namespace only) |
@@ -133,3 +151,5 @@ Prometheus metrics exposed on `:8080/metrics`:
 | `acm_sync_total` | Counter | `region`, `action` | Sync operations (`import` / `reimport` / `skipped`) |
 | `acm_sync_errors_total` | Counter | `region`, `action` | Failed sync operations |
 | `acm_sync_last_sync_timestamp` | Gauge | `region`, `secret` | Unix timestamp of last successful sync |
+| `cloudfront_sync_total` | Counter | `action` | CloudFront sync operations (`synced`) |
+| `cloudfront_sync_errors_total` | Counter | `error_type` | Failed CloudFront sync operations (`get_config` / `update` / `extract_id` / `extract_sans`) |

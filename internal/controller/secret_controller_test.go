@@ -8,13 +8,17 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsacm "github.com/aws/aws-sdk-go-v2/service/acm"
 	acmtypes "github.com/aws/aws-sdk-go-v2/service/acm/types"
+	"github.com/aws/aws-sdk-go-v2/service/cloudfront"
+	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudfront/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -30,11 +34,17 @@ import (
 
 	acmclient "github.com/camilorivera/cert-manager-acm-sync/internal/acm"
 	"github.com/camilorivera/cert-manager-acm-sync/internal/annotations"
+	cloudfrontclient "github.com/camilorivera/cert-manager-acm-sync/internal/cloudfront"
 	"github.com/camilorivera/cert-manager-acm-sync/internal/controller"
 	"github.com/camilorivera/cert-manager-acm-sync/internal/fingerprint"
 )
 
 func generateCert(t *testing.T) (certPEM, keyPEM []byte) {
+	t.Helper()
+	return generateCertWithSANs(t, []string{"test.local"})
+}
+
+func generateCertWithSANs(t *testing.T, dnsNames []string) (certPEM, keyPEM []byte) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
@@ -43,6 +53,7 @@ func generateCert(t *testing.T) (certPEM, keyPEM []byte) {
 		Subject:      pkix.Name{CommonName: "test.local"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
+		DNSNames:     dnsNames,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	require.NoError(t, err)
@@ -55,16 +66,26 @@ func generateCert(t *testing.T) (certPEM, keyPEM []byte) {
 
 func buildReconciler(t *testing.T, acmMock *acmclient.MockACMAPI) (*controller.SecretReconciler, *record.FakeRecorder) {
 	t.Helper()
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	return buildReconcilerWithCF(t, acmMock, nil)
+}
+
+func buildReconcilerWithCF(t *testing.T, acmMock *acmclient.MockACMAPI, cfMock *cloudfrontclient.MockCloudFrontAPI) (*controller.SecretReconciler, *record.FakeRecorder) {
+	t.Helper()
+	sc := runtime.NewScheme()
+	_ = corev1.AddToScheme(sc)
+	fakeClient := fake.NewClientBuilder().WithScheme(sc).Build()
 	recorder := record.NewFakeRecorder(32)
+	var cfClient cloudfrontclient.CloudFrontAPI
+	if cfMock != nil {
+		cfClient = cfMock
+	}
 	return &controller.SecretReconciler{
-		Client:        fakeClient,
-		Reader:        fakeClient,
-		Recorder:      recorder,
-		ACMPool:       &acmclient.MockPool{Client: acmMock},
-		DefaultRegion: "us-east-1",
+		Client:           fakeClient,
+		Reader:           fakeClient,
+		Recorder:         recorder,
+		ACMPool:          &acmclient.MockPool{Client: acmMock},
+		DefaultRegion:    "us-east-1",
+		CloudFrontClient: cfClient,
 	}, recorder
 }
 
@@ -462,4 +483,246 @@ func TestReconcile_SecretRecreated_RecoverARNFromCertificate(t *testing.T) {
 	m.AssertNotCalled(t, "ImportCertificate", mock.Anything, mock.MatchedBy(func(in *awsacm.ImportCertificateInput) bool {
 		return in.CertificateArn == nil
 	}))
+}
+
+// ── CloudFront sync tests ─────────────────────────────────────────────────────
+
+const (
+	cfDistARN = "arn:aws:cloudfront::123456789012:distribution/EDFDVBD6EXAMPLE"
+	cfACMARN  = "arn:aws:acm:us-east-1:123:certificate/cf-cert"
+	cfETag    = "E2QWRUHEXAMPLE"
+)
+
+func minimalCFConfig() *cftypes.DistributionConfig {
+	return &cftypes.DistributionConfig{
+		CallerReference: aws.String("ref"),
+		Comment:         aws.String(""),
+		DefaultCacheBehavior: &cftypes.DefaultCacheBehavior{
+			ViewerProtocolPolicy: cftypes.ViewerProtocolPolicyRedirectToHttps,
+			TargetOriginId:       aws.String("origin"),
+			AllowedMethods: &cftypes.AllowedMethods{
+				Quantity: aws.Int32(2),
+				Items:    []cftypes.Method{cftypes.MethodGet, cftypes.MethodHead},
+			},
+		},
+		Enabled: aws.Bool(true),
+		Origins: &cftypes.Origins{
+			Quantity: aws.Int32(1),
+			Items:    []cftypes.Origin{{Id: aws.String("origin"), DomainName: aws.String("s3.example.com")}},
+		},
+		ViewerCertificate: &cftypes.ViewerCertificate{
+			SSLSupportMethod:             cftypes.SSLSupportMethodSniOnly,
+			MinimumProtocolVersion:       cftypes.MinimumProtocolVersionTLSv122021,
+			CloudFrontDefaultCertificate: aws.Bool(false),
+		},
+	}
+}
+
+func setupCFImportMock(acmMock *acmclient.MockACMAPI) {
+	acmMock.On("ImportCertificate", mock.Anything, mock.Anything).
+		Return(&awsacm.ImportCertificateOutput{CertificateArn: aws.String(cfACMARN)}, nil)
+}
+
+func TestReconcile_CloudFront_HappyPath(t *testing.T) {
+	certPEM, keyPEM := generateCertWithSANs(t, []string{"example.com", "www.example.com"})
+	acmMock := &acmclient.MockACMAPI{}
+	setupCFImportMock(acmMock)
+	cfMock := &cloudfrontclient.MockCloudFrontAPI{}
+	cfMock.On("GetDistributionConfig", mock.Anything, mock.Anything).
+		Return(&cloudfront.GetDistributionConfigOutput{
+			DistributionConfig: minimalCFConfig(),
+			ETag:               aws.String(cfETag),
+		}, nil)
+	cfMock.On("UpdateDistribution", mock.Anything, mock.MatchedBy(func(in *cloudfront.UpdateDistributionInput) bool {
+		return aws.ToString(in.DistributionConfig.ViewerCertificate.ACMCertificateArn) == cfACMARN &&
+			len(in.DistributionConfig.Aliases.Items) == 2
+	})).Return(&cloudfront.UpdateDistributionOutput{}, nil)
+
+	r, recorder := buildReconcilerWithCF(t, acmMock, cfMock)
+	require.NoError(t, r.Create(context.Background(),
+		tlsSecret(map[string]string{
+			annotations.Enabled:                   "true",
+			annotations.CloudFrontDistributionARN: cfDistARN,
+		}, certPEM, keyPEM)))
+
+	_, err := r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	cfMock.AssertExpectations(t)
+
+	// Drain events and check CloudFrontSynced is present.
+	var evts []string
+	for len(recorder.Events) > 0 {
+		evts = append(evts, <-recorder.Events)
+	}
+	assert.True(t, func() bool {
+		for _, e := range evts {
+			if strings.Contains(e, "CloudFrontSynced") {
+				return true
+			}
+		}
+		return false
+	}(), "expected CloudFrontSynced event")
+}
+
+func TestReconcile_CloudFront_AnnotationOnCertificate(t *testing.T) {
+	certPEM, keyPEM := generateCertWithSANs(t, []string{"cert-owner.example.com"})
+	acmMock := &acmclient.MockACMAPI{}
+	setupCFImportMock(acmMock)
+	cfMock := &cloudfrontclient.MockCloudFrontAPI{}
+	cfMock.On("GetDistributionConfig", mock.Anything, mock.Anything).
+		Return(&cloudfront.GetDistributionConfigOutput{
+			DistributionConfig: minimalCFConfig(),
+			ETag:               aws.String(cfETag),
+		}, nil)
+	cfMock.On("UpdateDistribution", mock.Anything, mock.Anything).
+		Return(&cloudfront.UpdateDistributionOutput{}, nil)
+
+	sc := runtime.NewScheme()
+	_ = corev1.AddToScheme(sc)
+	fakeClient := fake.NewClientBuilder().WithScheme(sc).Build()
+	recorder := record.NewFakeRecorder(32)
+	r := &controller.SecretReconciler{
+		Client:           fakeClient,
+		Reader:           fakeClient,
+		Recorder:         recorder,
+		ACMPool:          &acmclient.MockPool{Client: acmMock},
+		DefaultRegion:    "us-east-1",
+		CloudFrontClient: cfMock,
+	}
+
+	certObj := &unstructured.Unstructured{}
+	certObj.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
+	certObj.SetName("my-cert")
+	certObj.SetNamespace("default")
+	certObj.SetAnnotations(map[string]string{
+		annotations.Enabled:                   "true",
+		annotations.CloudFrontDistributionARN: cfDistARN,
+	})
+	require.NoError(t, fakeClient.Create(context.Background(), certObj))
+
+	secret := tlsSecret(nil, certPEM, keyPEM)
+	secret.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "cert-manager.io/v1",
+		Kind:       "Certificate",
+		Name:       "my-cert",
+	}}
+	require.NoError(t, fakeClient.Create(context.Background(), secret))
+
+	_, err := r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	cfMock.AssertCalled(t, "UpdateDistribution", mock.Anything, mock.Anything)
+}
+
+func TestReconcile_CloudFront_UpdateFails_ReconcileSucceeds(t *testing.T) {
+	certPEM, keyPEM := generateCertWithSANs(t, []string{"example.com"})
+	acmMock := &acmclient.MockACMAPI{}
+	setupCFImportMock(acmMock)
+	cfMock := &cloudfrontclient.MockCloudFrontAPI{}
+	cfMock.On("GetDistributionConfig", mock.Anything, mock.Anything).
+		Return(&cloudfront.GetDistributionConfigOutput{
+			DistributionConfig: minimalCFConfig(),
+			ETag:               aws.String(cfETag),
+		}, nil)
+	cfMock.On("UpdateDistribution", mock.Anything, mock.Anything).
+		Return(nil, errors.New("precondition failed"))
+
+	r, recorder := buildReconcilerWithCF(t, acmMock, cfMock)
+	require.NoError(t, r.Create(context.Background(),
+		tlsSecret(map[string]string{
+			annotations.Enabled:                   "true",
+			annotations.CloudFrontDistributionARN: cfDistARN,
+		}, certPEM, keyPEM)))
+
+	_, err := r.Reconcile(context.Background(), nn())
+	require.NoError(t, err, "CloudFront failure must not fail the reconcile")
+
+	var evts []string
+	for len(recorder.Events) > 0 {
+		evts = append(evts, <-recorder.Events)
+	}
+	assert.True(t, func() bool {
+		for _, e := range evts {
+			if strings.Contains(e, "CloudFrontSyncFailed") {
+				return true
+			}
+		}
+		return false
+	}(), "expected CloudFrontSyncFailed warning event")
+}
+
+func TestReconcile_CloudFront_GetConfigFails_ReconcileSucceeds(t *testing.T) {
+	certPEM, keyPEM := generateCertWithSANs(t, []string{"example.com"})
+	acmMock := &acmclient.MockACMAPI{}
+	setupCFImportMock(acmMock)
+	cfMock := &cloudfrontclient.MockCloudFrontAPI{}
+	cfMock.On("GetDistributionConfig", mock.Anything, mock.Anything).
+		Return(nil, errors.New("access denied"))
+
+	r, recorder := buildReconcilerWithCF(t, acmMock, cfMock)
+	require.NoError(t, r.Create(context.Background(),
+		tlsSecret(map[string]string{
+			annotations.Enabled:                   "true",
+			annotations.CloudFrontDistributionARN: cfDistARN,
+		}, certPEM, keyPEM)))
+
+	_, err := r.Reconcile(context.Background(), nn())
+	require.NoError(t, err, "CloudFront failure must not fail the reconcile")
+	cfMock.AssertNotCalled(t, "UpdateDistribution")
+
+	var evts []string
+	for len(recorder.Events) > 0 {
+		evts = append(evts, <-recorder.Events)
+	}
+	assert.True(t, func() bool {
+		for _, e := range evts {
+			if strings.Contains(e, "CloudFrontSyncFailed") {
+				return true
+			}
+		}
+		return false
+	}(), "expected CloudFrontSyncFailed warning event")
+}
+
+func TestReconcile_CloudFront_NoAnnotation_SkipsCF(t *testing.T) {
+	certPEM, keyPEM := generateCert(t)
+	acmMock := &acmclient.MockACMAPI{}
+	setupCFImportMock(acmMock)
+	cfMock := &cloudfrontclient.MockCloudFrontAPI{}
+
+	r, _ := buildReconcilerWithCF(t, acmMock, cfMock)
+	require.NoError(t, r.Create(context.Background(),
+		tlsSecret(map[string]string{annotations.Enabled: "true"}, certPEM, keyPEM)))
+
+	_, err := r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	cfMock.AssertNotCalled(t, "GetDistributionConfig")
+	cfMock.AssertNotCalled(t, "UpdateDistribution")
+}
+
+func TestReconcile_CloudFront_FingerprintUnchanged_SkipsCF(t *testing.T) {
+	certPEM, keyPEM := generateCertWithSANs(t, []string{"example.com"})
+	fp, err := fingerprint.Compute(certPEM)
+	require.NoError(t, err)
+	const arn = "arn:aws:acm:us-east-1:123:certificate/existing"
+
+	acmMock := &acmclient.MockACMAPI{}
+	acmMock.On("DescribeCertificate", mock.Anything, mock.Anything).
+		Return(&awsacm.DescribeCertificateOutput{
+			Certificate: &acmtypes.CertificateDetail{CertificateArn: aws.String(arn)},
+		}, nil)
+	cfMock := &cloudfrontclient.MockCloudFrontAPI{}
+
+	r, _ := buildReconcilerWithCF(t, acmMock, cfMock)
+	require.NoError(t, r.Create(context.Background(),
+		tlsSecret(map[string]string{
+			annotations.Enabled:                   "true",
+			annotations.ARN:                       arn,
+			annotations.Fingerprint:               fp,
+			annotations.CloudFrontDistributionARN: cfDistARN,
+		}, certPEM, keyPEM)))
+
+	_, err = r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	cfMock.AssertNotCalled(t, "GetDistributionConfig")
+	cfMock.AssertNotCalled(t, "UpdateDistribution")
 }

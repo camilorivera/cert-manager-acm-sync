@@ -4,24 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development environment
 
-There is no local Go installation required. All build, test, and lint commands run inside Docker via `docker compose`. Use `make` targets — do not invoke `go` directly on the host.
+There is no local Go installation required. All build, test, and lint commands run inside Docker via `docker compose`. Use explicit `docker compose run` commands — not `make` wrappers, not host `go`.
 
 ```bash
-make setup          # first-time: tidy go.mod/go.sum (run once, commit go.sum after)
-make build          # compile linux/amd64 binary to bin/manager
-make test-unit      # fast tests only (no envtest, uses -short flag)
-make test           # full test suite including controller integration tests (downloads envtest binaries)
-make lint           # golangci-lint
+docker compose run --rm dev go mod tidy                                          # first-time / dep changes
+docker compose run --rm dev go build -o bin/manager ./cmd/manager               # compile
+docker compose -f docker-compose.test.yml run --rm test                         # full test suite
+docker compose run --rm lint                                                     # golangci-lint
 ```
 
 Run a single test:
 ```bash
 docker compose run --rm dev go test -v -run TestReconcile ./internal/controller/
-```
-
-Run an arbitrary Go command:
-```bash
-make go CMD="vet ./..."
 ```
 
 ## Architecture
@@ -37,6 +31,7 @@ The `SecretReconciler` is the core. When triggered, it:
 3. Determines the target AWS region: `acm.sync/region` on the Secret takes precedence, then the same annotation on the Certificate, then the `--default-region` flag.
 4. Calls `acm:ImportCertificate` (or re-imports to the existing ARN). The `acm.Client` pool (`internal/acm`) lazily creates one `acm.Client` per region, sharing IRSA credentials.
 5. Patches `acm.sync/arn`, `acm.sync/fingerprint`, and `acm.sync/last-sync` back onto the Secret, and mirrors the ARN onto the owning Certificate so the ARN survives Secret deletion/recreation.
+6. **Optional CloudFront sync** (`maybeSyncCloudFront`): if `--enable-cloudfront-sync` is set and `acm.sync/cloudfront-distribution-arn` is annotated (on Secret or Certificate), calls `GetDistributionConfig` + `UpdateDistribution` to set the distribution's Aliases to the cert's DNS SANs and associate the new ACM ARN. This step is non-fatal — failure logs a warning event and increments `cloudfront_sync_errors_total` but does not cause a reconcile retry.
 
 ### ARN recovery
 
@@ -55,8 +50,9 @@ Two predicates prevent infinite reconcile loops:
 | `cmd/manager` | Flag parsing, AWS config loading (IRSA), manager setup |
 | `internal/controller` | `SecretReconciler`, predicates |
 | `internal/acm` | `ACMAPI` interface, region-keyed client pool, `ImportWithRetry` with exponential backoff |
-| `internal/annotations` | All `acm.sync/*` annotation keys and helpers |
-| `internal/fingerprint` | Leaf-cert SHA-256, PEM chain splitting for ACM's API |
+| `internal/annotations` | All `acm.sync/*` annotation keys and helpers; `StripACMAnnotations` strips only controller-written keys (ARN, fingerprint, last-sync) |
+| `internal/cloudfront` | `CloudFrontAPI` interface, single global client, `SyncDistribution` (ETag-based), `DistributionIDFromARN` |
+| `internal/fingerprint` | Leaf-cert SHA-256, PEM chain splitting for ACM's API, `ExtractSANs` (DNS names or CN fallback) |
 | `internal/metrics` | Prometheus counters/gauges registered into controller-runtime's registry |
 
 ### Testing approach

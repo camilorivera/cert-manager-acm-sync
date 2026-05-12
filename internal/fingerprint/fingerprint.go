@@ -2,6 +2,7 @@ package fingerprint
 
 import (
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
@@ -16,6 +17,27 @@ func Compute(certPEM []byte) (string, error) {
 	}
 	sum := sha256.Sum256(block.Bytes)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// ExtractSANs parses the leaf (first) certificate in certPEM and returns all
+// DNS Subject Alternative Names. Falls back to CommonName for legacy certs
+// that have no SANs.
+func ExtractSANs(certPEM []byte) ([]string, error) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("no CERTIFICATE PEM block found")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse certificate: %w", err)
+	}
+	if len(cert.DNSNames) > 0 {
+		return cert.DNSNames, nil
+	}
+	if cert.Subject.CommonName != "" {
+		return []string{cert.Subject.CommonName}, nil
+	}
+	return nil, fmt.Errorf("certificate has no DNS SANs and no CommonName")
 }
 
 // SplitChain separates the full PEM chain from tls.crt into the leaf cert

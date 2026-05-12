@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsacm "github.com/aws/aws-sdk-go-v2/service/acm"
 	corev1 "k8s.io/api/core/v1"
@@ -24,6 +26,7 @@ import (
 
 	acmclient "github.com/camilorivera/cert-manager-acm-sync/internal/acm"
 	"github.com/camilorivera/cert-manager-acm-sync/internal/annotations"
+	cloudfrontclient "github.com/camilorivera/cert-manager-acm-sync/internal/cloudfront"
 	"github.com/camilorivera/cert-manager-acm-sync/internal/fingerprint"
 	"github.com/camilorivera/cert-manager-acm-sync/internal/metrics"
 )
@@ -46,6 +49,9 @@ type SecretReconciler struct {
 	Recorder      record.EventRecorder
 	ACMPool       ACMPool
 	DefaultRegion string
+	// CloudFrontClient is optional. When nil (default), CloudFront sync is
+	// skipped even if the annotation is present. Enable via --enable-cloudfront-sync.
+	CloudFrontClient cloudfrontclient.CloudFrontAPI
 }
 
 var certGVK = schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"}
@@ -268,7 +274,59 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	metrics.LastSyncTimestamp.WithLabelValues(region, req.NamespacedName.String()).SetToCurrentTime()
 
 	logger.Info("sync complete", "action", action, "arn", newARN, "region", region)
+
+	r.maybeSyncCloudFront(ctx, &secret, certOwner, newARN, certPEM, logger)
+
 	return ctrl.Result{RequeueAfter: periodicRequeueInterval}, nil
+}
+
+func (r *SecretReconciler) maybeSyncCloudFront(
+	ctx context.Context,
+	secret *corev1.Secret,
+	certOwner *unstructured.Unstructured,
+	acmCertARN string,
+	certPEM []byte,
+	logger logr.Logger,
+) {
+	if r.CloudFrontClient == nil {
+		return
+	}
+
+	distARN := annotations.GetCloudFrontDistributionARN(secret.Annotations)
+	if distARN == "" && certOwner != nil {
+		distARN = annotations.GetCloudFrontDistributionARN(certOwner.GetAnnotations())
+	}
+	if distARN == "" {
+		return
+	}
+
+	sans, err := fingerprint.ExtractSANs(certPEM)
+	if err != nil {
+		metrics.CloudFrontSyncErrorsTotal.WithLabelValues("extract_sans").Inc()
+		logger.Error(err, "cloudfront sync: failed to extract SANs")
+		r.recorder().Event(secret, corev1.EventTypeWarning, "CloudFrontSyncFailed",
+			fmt.Sprintf("failed to extract SANs for CloudFront sync: %v", err))
+		return
+	}
+
+	if err := cloudfrontclient.SyncDistribution(ctx, r.CloudFrontClient, distARN, acmCertARN, sans); err != nil {
+		errType := "update"
+		if strings.Contains(err.Error(), "GetDistributionConfig") {
+			errType = "get_config"
+		} else if strings.Contains(err.Error(), "extract distribution ID") {
+			errType = "extract_id"
+		}
+		metrics.CloudFrontSyncErrorsTotal.WithLabelValues(errType).Inc()
+		logger.Error(err, "cloudfront sync failed; ACM import succeeded",
+			"distributionARN", distARN, "acmCertARN", acmCertARN)
+		r.recorder().Event(secret, corev1.EventTypeWarning, "CloudFrontSyncFailed", err.Error())
+		return
+	}
+
+	metrics.CloudFrontSyncTotal.WithLabelValues("synced").Inc()
+	logger.Info("cloudfront sync complete", "distributionARN", distARN, "acmCertARN", acmCertARN, "sans", sans)
+	r.recorder().Event(secret, corev1.EventTypeNormal, "CloudFrontSynced",
+		fmt.Sprintf("CloudFront distribution %s updated (acmCertARN=%s)", distARN, acmCertARN))
 }
 
 func (r *SecretReconciler) recorder() record.EventRecorder {
