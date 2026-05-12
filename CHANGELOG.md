@@ -1,3 +1,15 @@
+## [0.6.3](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.6.2...v0.6.3) (2026-05-12)
+
+
+### Bug Fixes
+
+* **deps:** update aws-sdk-go-v2 monorepo ([eb325d6](https://github.com/camilorivera/cert-manager-acm-sync/commit/eb325d6393caffaafa22a3697d85c1fbc8915c7f))
+* **deps:** update kubernetes monorepo to v0.36.0 ([ffaa0bb](https://github.com/camilorivera/cert-manager-acm-sync/commit/ffaa0bbd0ec16ccc3f83574c3b29d7682e29e542))
+* **deps:** update module github.com/prometheus/client_golang to v1.23.2 ([5758ea9](https://github.com/camilorivera/cert-manager-acm-sync/commit/5758ea94b74aaa4db34609c54ccdf7381ae49514))
+* **deps:** update module github.com/stretchr/testify to v1.11.1 ([8a9063c](https://github.com/camilorivera/cert-manager-acm-sync/commit/8a9063c69d9a848318c2f7e85b2ae74895b7b54f))
+* **deps:** update module go.uber.org/zap to v1.28.0 ([fcbcaed](https://github.com/camilorivera/cert-manager-acm-sync/commit/fcbcaed81c7ba9aa70fcbd9c51d6ab28f3a9ffb6))
+* **deps:** update module sigs.k8s.io/controller-runtime to v0.24.0 ([c1e9308](https://github.com/camilorivera/cert-manager-acm-sync/commit/c1e9308ac7752eb4d799a23c11c6068d7fd83075))
+
 ## [0.6.2](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.6.1...v0.6.2) (2026-05-11)
 
 
