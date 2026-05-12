@@ -1,3 +1,10 @@
+# [0.7.0](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.6.3...v0.7.0) (2026-05-12)
+
+
+### Features
+
+* add optional CloudFront distribution alias sync after ACM import ([ec548c8](https://github.com/camilorivera/cert-manager-acm-sync/commit/ec548c8c177320cd6835f50ebfebbe3b20962478))
+
 ## [0.6.3](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.6.2...v0.6.3) (2026-05-12)
 
 
