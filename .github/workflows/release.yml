@@ -36,7 +36,7 @@ jobs:
       published: ${{ steps.release.outputs.new_release_published }}
       version: ${{ steps.release.outputs.new_release_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - id: release
@@ -58,7 +58,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: v${{ needs.release.outputs.version }}
 
@@ -98,7 +98,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: v${{ needs.release.outputs.version }}
 
