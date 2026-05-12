@@ -28,7 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -64,17 +64,17 @@ func generateCertWithSANs(t *testing.T, dnsNames []string) (certPEM, keyPEM []by
 	return
 }
 
-func buildReconciler(t *testing.T, acmMock *acmclient.MockACMAPI) (*controller.SecretReconciler, *record.FakeRecorder) {
+func buildReconciler(t *testing.T, acmMock *acmclient.MockACMAPI) (*controller.SecretReconciler, *events.FakeRecorder) {
 	t.Helper()
 	return buildReconcilerWithCF(t, acmMock, nil)
 }
 
-func buildReconcilerWithCF(t *testing.T, acmMock *acmclient.MockACMAPI, cfMock *cloudfrontclient.MockCloudFrontAPI) (*controller.SecretReconciler, *record.FakeRecorder) {
+func buildReconcilerWithCF(t *testing.T, acmMock *acmclient.MockACMAPI, cfMock *cloudfrontclient.MockCloudFrontAPI) (*controller.SecretReconciler, *events.FakeRecorder) {
 	t.Helper()
 	sc := runtime.NewScheme()
 	_ = corev1.AddToScheme(sc)
 	fakeClient := fake.NewClientBuilder().WithScheme(sc).Build()
-	recorder := record.NewFakeRecorder(32)
+	recorder := events.NewFakeRecorder(32)
 	var cfClient cloudfrontclient.CloudFrontAPI
 	if cfMock != nil {
 		cfClient = cfMock
@@ -254,7 +254,7 @@ func TestReconcile_CertificateAnnotation_EnablesSync(t *testing.T) {
 	sc := runtime.NewScheme()
 	_ = corev1.AddToScheme(sc)
 	fakeClient := fake.NewClientBuilder().WithScheme(sc).Build()
-	recorder := record.NewFakeRecorder(32)
+	recorder := events.NewFakeRecorder(32)
 	r := &controller.SecretReconciler{
 		Client:        fakeClient,
 		Reader:        fakeClient,
@@ -310,7 +310,7 @@ func TestReconcile_CertificateAnnotation_RegionFallback(t *testing.T) {
 	}
 
 	fakeClient := fake.NewClientBuilder().WithScheme(sc).Build()
-	recorder := record.NewFakeRecorder(32)
+	recorder := events.NewFakeRecorder(32)
 	r := &controller.SecretReconciler{
 		Client:        fakeClient,
 		Reader:        fakeClient,
@@ -372,7 +372,7 @@ func TestReconcile_Skip_BackfillsARNOntoCertificate(t *testing.T) {
 	sc := runtime.NewScheme()
 	_ = corev1.AddToScheme(sc)
 	fakeClient := fake.NewClientBuilder().WithScheme(sc).Build()
-	recorder := record.NewFakeRecorder(32)
+	recorder := events.NewFakeRecorder(32)
 	r := &controller.SecretReconciler{
 		Client:        fakeClient,
 		Reader:        fakeClient,
@@ -434,7 +434,7 @@ func TestReconcile_SecretRecreated_RecoverARNFromCertificate(t *testing.T) {
 	sc := runtime.NewScheme()
 	_ = corev1.AddToScheme(sc)
 	fakeClient := fake.NewClientBuilder().WithScheme(sc).Build()
-	recorder := record.NewFakeRecorder(32)
+	recorder := events.NewFakeRecorder(32)
 	r := &controller.SecretReconciler{
 		Client:        fakeClient,
 		Reader:        fakeClient,
@@ -580,7 +580,7 @@ func TestReconcile_CloudFront_AnnotationOnCertificate(t *testing.T) {
 	sc := runtime.NewScheme()
 	_ = corev1.AddToScheme(sc)
 	fakeClient := fake.NewClientBuilder().WithScheme(sc).Build()
-	recorder := record.NewFakeRecorder(32)
+	recorder := events.NewFakeRecorder(32)
 	r := &controller.SecretReconciler{
 		Client:           fakeClient,
 		Reader:           fakeClient,
