@@ -19,6 +19,7 @@ import (
 	acmtypes "github.com/aws/aws-sdk-go-v2/service/acm/types"
 	"github.com/aws/aws-sdk-go-v2/service/cloudfront"
 	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudfront/types"
+	smithy "github.com/aws/smithy-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -725,4 +726,53 @@ func TestReconcile_CloudFront_FingerprintUnchanged_SkipsCF(t *testing.T) {
 	require.NoError(t, err)
 	cfMock.AssertNotCalled(t, "GetDistributionConfig")
 	cfMock.AssertNotCalled(t, "UpdateDistribution")
+}
+
+func TestReconcile_CloudFront_InvalidViewerCertificate_RetriesViaClearedFingerprint(t *testing.T) {
+	certPEM, keyPEM := generateCertWithSANs(t, []string{"example.com", "new.example.com"})
+	acmMock := &acmclient.MockACMAPI{}
+	setupCFImportMock(acmMock)
+
+	invalidCertErr := &smithy.GenericAPIError{
+		Code:    "InvalidViewerCertificate",
+		Message: "The certificate doesn't cover the alternate domain name",
+	}
+	cfMock := &cloudfrontclient.MockCloudFrontAPI{}
+	cfMock.On("GetDistributionConfig", mock.Anything, mock.Anything).
+		Return(&cloudfront.GetDistributionConfigOutput{
+			DistributionConfig: minimalCFConfig(),
+			ETag:               aws.String(cfETag),
+		}, nil)
+	cfMock.On("UpdateDistribution", mock.Anything, mock.Anything).
+		Return(nil, invalidCertErr)
+
+	r, recorder := buildReconcilerWithCF(t, acmMock, cfMock)
+	require.NoError(t, r.Create(context.Background(),
+		tlsSecret(map[string]string{
+			annotations.Enabled:                   "true",
+			annotations.CloudFrontDistributionARN: cfDistARN,
+		}, certPEM, keyPEM)))
+
+	result, err := r.Reconcile(context.Background(), nn())
+	require.NoError(t, err, "InvalidViewerCertificate must not fail the reconcile")
+	assert.Equal(t, 2*time.Minute, result.RequeueAfter, "should requeue after 2 minutes")
+
+	// Fingerprint must be absent so the next reconcile re-imports and retries.
+	var secret corev1.Secret
+	require.NoError(t, r.Get(context.Background(), nn().NamespacedName, &secret))
+	assert.Empty(t, secret.Annotations[annotations.Fingerprint], "fingerprint must be cleared for retry")
+	assert.NotEmpty(t, secret.Annotations[annotations.ARN], "ARN must still be set")
+
+	var evts []string
+	for len(recorder.Events) > 0 {
+		evts = append(evts, <-recorder.Events)
+	}
+	assert.True(t, func() bool {
+		for _, e := range evts {
+			if strings.Contains(e, "CloudFrontSyncDeferred") {
+				return true
+			}
+		}
+		return false
+	}(), "expected CloudFrontSyncDeferred warning event")
 }

@@ -275,11 +275,25 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	logger.Info("sync complete", "action", action, "arn", newARN, "region", region)
 
-	r.maybeSyncCloudFront(ctx, &secret, certOwner, newARN, certPEM, logger)
+	if r.maybeSyncCloudFront(ctx, &secret, certOwner, newARN, certPEM, logger) {
+		// InvalidViewerCertificate: ACM propagation delay. Strip the fingerprint
+		// so the next reconcile re-imports to the same ARN and retries CF sync.
+		retryBase := secret.DeepCopy()
+		delete(secret.Annotations, annotations.Fingerprint)
+		if patchErr := r.Patch(ctx, &secret, client.MergeFrom(retryBase)); patchErr != nil {
+			logger.Error(patchErr, "failed to clear fingerprint for CloudFront retry")
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{RequeueAfter: 2 * time.Minute}, nil
+	}
 
 	return ctrl.Result{RequeueAfter: periodicRequeueInterval}, nil
 }
 
+// maybeSyncCloudFront attempts to update the CloudFront distribution. It returns
+// true when the update must be retried because ACM hasn't yet propagated the
+// new certificate to CloudFront's validation layer (InvalidViewerCertificate).
+// All other failures are non-fatal: they are logged and return false.
 func (r *SecretReconciler) maybeSyncCloudFront(
 	ctx context.Context,
 	secret *corev1.Secret,
@@ -287,9 +301,9 @@ func (r *SecretReconciler) maybeSyncCloudFront(
 	acmCertARN string,
 	certPEM []byte,
 	logger logr.Logger,
-) {
+) bool {
 	if r.CloudFrontClient == nil {
-		return
+		return false
 	}
 
 	distARN := annotations.GetCloudFrontDistributionARN(secret.Annotations)
@@ -297,7 +311,7 @@ func (r *SecretReconciler) maybeSyncCloudFront(
 		distARN = annotations.GetCloudFrontDistributionARN(certOwner.GetAnnotations())
 	}
 	if distARN == "" {
-		return
+		return false
 	}
 
 	sans, err := fingerprint.ExtractSANs(certPEM)
@@ -306,10 +320,22 @@ func (r *SecretReconciler) maybeSyncCloudFront(
 		logger.Error(err, "cloudfront sync: failed to extract SANs")
 		r.Recorder.Eventf(secret, nil, corev1.EventTypeWarning, "CloudFrontSyncFailed",
 			"SyncingCloudFront", "failed to extract SANs for CloudFront sync: %v", err)
-		return
+		return false
 	}
 
 	if err := cloudfrontclient.SyncDistribution(ctx, r.CloudFrontClient, distARN, acmCertARN, sans); err != nil {
+		if cloudfrontclient.IsInvalidViewerCertificate(err) {
+			// ACM hasn't propagated the new certificate to CloudFront's
+			// validation layer yet. Signal the caller to strip the stored
+			// fingerprint so the next reconcile re-imports to the same ARN
+			// and retries the CloudFront update.
+			metrics.CloudFrontSyncErrorsTotal.WithLabelValues("invalid_viewer_cert").Inc()
+			logger.Info("cloudfront sync deferred: certificate not yet visible to CloudFront validator; will retry",
+				"distributionARN", distARN, "acmCertARN", acmCertARN)
+			r.Recorder.Eventf(secret, nil, corev1.EventTypeWarning, "CloudFrontSyncDeferred",
+				"SyncingCloudFront", "CloudFront sync deferred: certificate not yet propagated; retrying in 2m")
+			return true
+		}
 		errType := "update"
 		if strings.Contains(err.Error(), "GetDistributionConfig") {
 			errType = "get_config"
@@ -320,13 +346,14 @@ func (r *SecretReconciler) maybeSyncCloudFront(
 		logger.Error(err, "cloudfront sync failed; ACM import succeeded",
 			"distributionARN", distARN, "acmCertARN", acmCertARN)
 		r.Recorder.Eventf(secret, nil, corev1.EventTypeWarning, "CloudFrontSyncFailed", "SyncingCloudFront", err.Error())
-		return
+		return false
 	}
 
 	metrics.CloudFrontSyncTotal.WithLabelValues("synced").Inc()
 	logger.Info("cloudfront sync complete", "distributionARN", distARN, "acmCertARN", acmCertARN, "sans", sans)
 	r.Recorder.Eventf(secret, nil, corev1.EventTypeNormal, "CloudFrontSynced",
 		"SyncingCloudFront", "CloudFront distribution %s updated (acmCertARN=%s)", distARN, acmCertARN)
+	return false
 }
 
 func (r *SecretReconciler) SetupWithManager(mgr ctrl.Manager) error {

@@ -3,17 +3,29 @@ package cloudfrontclient_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudfront"
 	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudfront/types"
+	smithy "github.com/aws/smithy-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	cloudfrontclient "github.com/camilorivera/cert-manager-acm-sync/internal/cloudfront"
 )
+
+func TestIsInvalidViewerCertificate(t *testing.T) {
+	raw := &smithy.GenericAPIError{Code: "InvalidViewerCertificate", Message: "cert doesn't cover domain"}
+	wrapped := fmt.Errorf("cloudfront UpdateDistribution ABC: %w", raw)
+
+	assert.True(t, cloudfrontclient.IsInvalidViewerCertificate(raw), "raw error")
+	assert.True(t, cloudfrontclient.IsInvalidViewerCertificate(wrapped), "wrapped error")
+	assert.False(t, cloudfrontclient.IsInvalidViewerCertificate(errors.New("some other error")))
+	assert.False(t, cloudfrontclient.IsInvalidViewerCertificate(&smithy.GenericAPIError{Code: "AccessDenied"}))
+}
 
 func TestDistributionIDFromARN(t *testing.T) {
 	tests := []struct {

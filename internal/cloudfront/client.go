@@ -2,12 +2,14 @@ package cloudfrontclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudfront"
 	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudfront/types"
+	smithy "github.com/aws/smithy-go"
 )
 
 // CloudFrontAPI is the subset of cloudfront.Client methods the controller uses.
@@ -30,6 +32,16 @@ func DistributionIDFromARN(arn string) (string, error) {
 		return "", fmt.Errorf("cloudfront: cannot extract distribution ID from ARN %q", arn)
 	}
 	return arn[idx+1:], nil
+}
+
+// IsInvalidViewerCertificate reports whether err is a CloudFront
+// InvalidViewerCertificate error. This happens transiently right after
+// ACM ImportCertificate: CloudFront's validation layer may not yet see the
+// new certificate's SANs, so it rejects the UpdateDistribution call even
+// though the cert was imported successfully.
+func IsInvalidViewerCertificate(err error) bool {
+	var ae smithy.APIError
+	return errors.As(err, &ae) && ae.ErrorCode() == "InvalidViewerCertificate"
 }
 
 // SyncDistribution updates a CloudFront distribution's ACM certificate ARN and
