@@ -6,7 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.7
 	github.com/aws/aws-sdk-go-v2/config v1.32.17
 	github.com/aws/aws-sdk-go-v2/service/acm v1.38.3
-	github.com/aws/aws-sdk-go-v2/service/cloudfront v1.63.0
+	github.com/aws/aws-sdk-go-v2/service/cloudfront v1.64.0
 	github.com/aws/smithy-go v1.25.1
 	github.com/go-logr/logr v1.4.3
 	github.com/prometheus/client_golang v1.23.2
