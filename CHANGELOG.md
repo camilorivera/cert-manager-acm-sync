@@ -1,3 +1,10 @@
+## [0.7.4](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.7.3...v0.7.4) (2026-06-22)
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/aws/smithy-go to v1.27.2 ([e365fe4](https://github.com/camilorivera/cert-manager-acm-sync/commit/e365fe4aba824ea3e748a353b47d2c257aed5613))
+
 ## [0.7.3](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.7.2...v0.7.3) (2026-06-22)
 
 
