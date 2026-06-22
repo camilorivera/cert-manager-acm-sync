@@ -1,3 +1,11 @@
+## [0.7.3](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.7.2...v0.7.3) (2026-06-22)
+
+
+### Bug Fixes
+
+* **deps:** update aws-sdk-go-v2 monorepo ([a36d4d1](https://github.com/camilorivera/cert-manager-acm-sync/commit/a36d4d1fe7b437921c9aebd6ade3962e37d2208b))
+* **deps:** update module sigs.k8s.io/controller-runtime to v0.24.1 ([1535e75](https://github.com/camilorivera/cert-manager-acm-sync/commit/1535e753e69432e1f76846dfb499c23b20d5f771))
+
 ## [0.7.2](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.7.1...v0.7.2) (2026-05-12)
 
 
