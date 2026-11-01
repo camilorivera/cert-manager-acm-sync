@@ -3,5 +3,14 @@
   "extends": ["config:recommended"],
   "labels": ["dependencies"],
   "schedule": ["before 9am on monday"],
-  "automerge": false
+  "automerge": false,
+  "osvVulnerabilityAlerts": true,
+  "packageRules": [
+    {
+      "matchManagers": ["gomod"],
+      "matchDepTypes": ["indirect"],
+      "enabled": true
+    }
+  ],
+  "postUpdateOptions": ["gomodTidy"]
 }
