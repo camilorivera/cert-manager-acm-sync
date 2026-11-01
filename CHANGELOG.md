@@ -1,3 +1,16 @@
+## [0.7.5](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.7.4...v0.7.5) (2026-11-01)
+
+
+### Bug Fixes
+
+* **deps:** bump golang.org/x/net and x/text to fix HTTP/2 and DoS CVEs ([c55d564](https://github.com/camilorivera/cert-manager-acm-sync/commit/c55d564ee138d2695951ad8a95a88b56b0083a3d))
+* **deps:** update aws-sdk-go-v2 monorepo ([91b263b](https://github.com/camilorivera/cert-manager-acm-sync/commit/91b263b7a97bc22ebe7ccb41bafb34d4c400b619))
+* **deps:** update module github.com/aws/smithy-go to v1.28.7 ([a7ac8f8](https://github.com/camilorivera/cert-manager-acm-sync/commit/a7ac8f8fff70eb60ed6753eaa79417900d9f83f6))
+* **deps:** update module github.com/go-logr/logr to v1.4.4 ([bda7e6a](https://github.com/camilorivera/cert-manager-acm-sync/commit/bda7e6ab1ff21bd4691db13ec7b3eac28dae4ccf))
+* **deps:** update module github.com/prometheus/client_golang to v1.24.1 ([c1b9018](https://github.com/camilorivera/cert-manager-acm-sync/commit/c1b901893256c61f9af8cc490440a7041865edba))
+* **deps:** update module github.com/stretchr/testify to v1.12.1 ([7a74071](https://github.com/camilorivera/cert-manager-acm-sync/commit/7a74071a6e43985314b91d2ec6ed8d276690e8a0))
+* **deps:** update module sigs.k8s.io/controller-runtime to v0.25.2 ([41f0a98](https://github.com/camilorivera/cert-manager-acm-sync/commit/41f0a98f39b30769a454ba252832a6abf941354c))
+
 ## [0.7.4](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.7.3...v0.7.4) (2026-06-22)
 
 
