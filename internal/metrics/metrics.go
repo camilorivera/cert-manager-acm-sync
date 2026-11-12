@@ -30,11 +30,22 @@ var (
 		Name: "cloudfront_sync_errors_total",
 		Help: "Total number of CloudFront distribution sync errors.",
 	}, []string{"error_type"})
+
+	DNSSyncTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "dns_sync_total",
+		Help: "Total number of DNS record sync outcomes.",
+	}, []string{"provider", "action"})
+
+	DNSSyncErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "dns_sync_errors_total",
+		Help: "Total number of DNS record sync errors.",
+	}, []string{"provider", "error_type"})
 )
 
 func init() {
 	metrics.Registry.MustRegister(
 		SyncTotal, SyncErrorsTotal, LastSyncTimestamp,
 		CloudFrontSyncTotal, CloudFrontSyncErrorsTotal,
+		DNSSyncTotal, DNSSyncErrorsTotal,
 	)
 }

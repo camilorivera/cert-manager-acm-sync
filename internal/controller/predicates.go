@@ -3,13 +3,22 @@ package controller
 import (
 	"bytes"
 	"reflect"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/camilorivera/cert-manager-acm-sync/internal/annotations"
 )
+
+// awaitingDNSCleanup reports whether obj is being deleted while still holding
+// the DNS cleanup finalizer, which only the reconciler can release.
+func awaitingDNSCleanup(obj client.Object) bool {
+	return obj.GetDeletionTimestamp() != nil &&
+		slices.Contains(obj.GetFinalizers(), annotations.DNSCleanupFinalizer)
+}
 
 // TLSAnnotatedPredicate passes kubernetes.io/tls Secrets to the reconciler.
 //
@@ -40,6 +49,9 @@ func (TLSAnnotatedPredicate) Update(e event.UpdateEvent) bool {
 	newS, ok := e.ObjectNew.(*corev1.Secret)
 	if !ok || newS.Type != corev1.SecretTypeTLS {
 		return false
+	}
+	if awaitingDNSCleanup(newS) {
+		return true
 	}
 	oldS, ok := e.ObjectOld.(*corev1.Secret)
 	if !ok {
@@ -87,6 +99,9 @@ func (CertificateAnnotatedPredicate) Create(e event.CreateEvent) bool {
 }
 
 func (CertificateAnnotatedPredicate) Update(e event.UpdateEvent) bool {
+	if awaitingDNSCleanup(e.ObjectNew) {
+		return true
+	}
 	if !annotations.IsEnabled(e.ObjectNew.GetAnnotations()) {
 		return false
 	}

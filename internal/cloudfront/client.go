@@ -15,6 +15,7 @@ import (
 // CloudFrontAPI is the subset of cloudfront.Client methods the controller uses.
 type CloudFrontAPI interface {
 	GetDistributionConfig(ctx context.Context, params *cloudfront.GetDistributionConfigInput, optFns ...func(*cloudfront.Options)) (*cloudfront.GetDistributionConfigOutput, error)
+	GetDistribution(ctx context.Context, params *cloudfront.GetDistributionInput, optFns ...func(*cloudfront.Options)) (*cloudfront.GetDistributionOutput, error)
 	UpdateDistribution(ctx context.Context, params *cloudfront.UpdateDistributionInput, optFns ...func(*cloudfront.Options)) (*cloudfront.UpdateDistributionOutput, error)
 }
 
@@ -32,6 +33,22 @@ func DistributionIDFromARN(arn string) (string, error) {
 		return "", fmt.Errorf("cloudfront: cannot extract distribution ID from ARN %q", arn)
 	}
 	return arn[idx+1:], nil
+}
+
+// DistributionDomainName returns the cloudfront.net domain name of the distribution.
+func DistributionDomainName(ctx context.Context, client CloudFrontAPI, distributionARN string) (string, error) {
+	distID, err := DistributionIDFromARN(distributionARN)
+	if err != nil {
+		return "", err
+	}
+	out, err := client.GetDistribution(ctx, &cloudfront.GetDistributionInput{Id: aws.String(distID)})
+	if err != nil {
+		return "", fmt.Errorf("cloudfront GetDistribution %s: %w", distID, err)
+	}
+	if out.Distribution == nil || aws.ToString(out.Distribution.DomainName) == "" {
+		return "", fmt.Errorf("cloudfront: GetDistribution returned no domain name for %s", distID)
+	}
+	return aws.ToString(out.Distribution.DomainName), nil
 }
 
 // IsInvalidViewerCertificate reports whether err is a CloudFront

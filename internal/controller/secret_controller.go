@@ -27,6 +27,7 @@ import (
 	acmclient "github.com/camilorivera/cert-manager-acm-sync/internal/acm"
 	"github.com/camilorivera/cert-manager-acm-sync/internal/annotations"
 	cloudfrontclient "github.com/camilorivera/cert-manager-acm-sync/internal/cloudfront"
+	"github.com/camilorivera/cert-manager-acm-sync/internal/dns"
 	"github.com/camilorivera/cert-manager-acm-sync/internal/fingerprint"
 	"github.com/camilorivera/cert-manager-acm-sync/internal/metrics"
 )
@@ -52,6 +53,10 @@ type SecretReconciler struct {
 	// CloudFrontClient is optional. When nil (default), CloudFront sync is
 	// skipped even if the annotation is present. Enable via --enable-cloudfront-sync.
 	CloudFrontClient cloudfrontclient.CloudFrontAPI
+	// DNS is optional. When nil (default), DNS record sync and cleanup are
+	// disabled. Enable via --dns-provider.
+	DNS         *dns.Syncer
+	DNSDefaults DNSDefaults
 }
 
 var certGVK = schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"}
@@ -102,7 +107,7 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	var secret corev1.Secret
 	if err := r.Get(ctx, req.NamespacedName, &secret); err != nil {
 		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
+			return r.finalizeOrphanedCertificate(ctx, req)
 		}
 		return ctrl.Result{}, err
 	}
@@ -111,6 +116,10 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// and region fallback when the annotation lives on the Certificate rather
 	// than being propagated to the Secret via secretTemplate.
 	certOwner := r.findCertificateOwner(ctx, &secret)
+
+	if res, handled, err := r.finalizeDNS(ctx, &secret, certOwner); handled {
+		return res, err
+	}
 
 	// Belt-and-suspenders: the predicate passes all TLS Secrets; bail quickly
 	// if neither the Secret nor its Certificate owner has opted in.
@@ -196,6 +205,9 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			if err := r.Patch(ctx, certOwner, client.MergeFrom(certPatch)); err != nil {
 				logger.Error(err, "failed to backfill ARN annotation onto Certificate", "arn", existingARN)
 			}
+		}
+		if r.maybeSyncDNS(ctx, &secret, certOwner, certPEM, logger) {
+			return ctrl.Result{RequeueAfter: dnsRetryInterval}, nil
 		}
 		return ctrl.Result{RequeueAfter: periodicRequeueInterval}, nil
 	}
@@ -285,6 +297,10 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{}, patchErr
 		}
 		return ctrl.Result{RequeueAfter: 2 * time.Minute}, nil
+	}
+
+	if r.maybeSyncDNS(ctx, &secret, certOwner, certPEM, logger) {
+		return ctrl.Result{RequeueAfter: dnsRetryInterval}, nil
 	}
 
 	return ctrl.Result{RequeueAfter: periodicRequeueInterval}, nil
