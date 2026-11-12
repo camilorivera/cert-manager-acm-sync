@@ -18,6 +18,31 @@ controller:
   # Requires cloudfront:GetDistributionConfig and cloudfront:UpdateDistribution IAM permissions.
   enableCloudfrontSync: false
 
+# Optional DNS record sync. Disabled while provider is empty.
+# One provider per deployment. The chart never creates the DNSimple token Secret.
+dns:
+  # route53 or dnsimple
+  provider: ""
+  # Managed zones. route53 requires an id.
+  zones: []
+  # - name: example.com
+  #   id: Z123EXAMPLE
+  ownerId: default
+  defaultTarget: ""
+  defaultTTL: 300
+  # CNAME or ALIAS
+  defaultRecordType: CNAME
+  # skip or create
+  wildcardPolicy: skip
+  # retain or delete
+  deletePolicy: retain
+  dnsimple:
+    accountId: ""
+    baseUrl: ""
+    existingSecret:
+      name: ""
+      key: token
+
 serviceAccount:
   create: true
   name: ""
@@ -83,6 +108,11 @@ certificates: []
 #   annotations:
 #     acm.sync/enabled: "true"
 #     # acm.sync/region: "us-east-1"   # required for CloudFront
+#     # acm.sync/dns-enabled: "true"   # requires dns.provider
+#     # acm.sync/dns-target: "d111111abcdef8.cloudfront.net"
+#     # acm.sync/dns-record-type: "CNAME"
+#     # acm.sync/dns-ttl: "300"
+#     # acm.sync/dns-adopt: "true"
 #   spec:
 #     secretName: my-service-tls
 #     dnsNames:

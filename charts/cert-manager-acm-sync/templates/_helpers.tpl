@@ -58,3 +58,38 @@ Image tag — defaults to appVersion
 {{- define "cert-manager-acm-sync.imageTag" -}}
 {{- default .Chart.AppVersion .Values.image.tag }}
 {{- end }}
+
+{{/*
+Validates the dns values and renders --dns-zones as name[=id],...
+*/}}
+{{- define "cert-manager-acm-sync.dnsZones" -}}
+{{- $dns := .Values.dns -}}
+{{- if not (has $dns.provider (list "route53" "dnsimple")) -}}
+{{- fail (printf "dns.provider must be route53 or dnsimple, got %q" $dns.provider) -}}
+{{- end -}}
+{{- if not $dns.zones -}}
+{{- fail "dns.zones must list at least one zone when dns.provider is set" -}}
+{{- end -}}
+{{- if eq $dns.provider "dnsimple" -}}
+{{- if not $dns.dnsimple.accountId -}}
+{{- fail "dns.dnsimple.accountId is required when dns.provider is dnsimple" -}}
+{{- end -}}
+{{- if not $dns.dnsimple.existingSecret.name -}}
+{{- fail "dns.dnsimple.existingSecret.name is required when dns.provider is dnsimple" -}}
+{{- end -}}
+{{- end -}}
+{{- $zones := list -}}
+{{- range $dns.zones -}}
+{{- if eq $dns.provider "route53" -}}
+{{- if not .id -}}
+{{- fail (printf "dns.zones entry %q needs an id for route53" .name) -}}
+{{- end -}}
+{{- end -}}
+{{- if .id -}}
+{{- $zones = append $zones (printf "%s=%s" .name .id) -}}
+{{- else -}}
+{{- $zones = append $zones .name -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $zones -}}
+{{- end }}
