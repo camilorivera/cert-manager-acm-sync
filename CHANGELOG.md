@@ -1,3 +1,20 @@
+# [0.8.0](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.7.5...v0.8.0) (2026-11-12)
+
+
+### Bug Fixes
+
+* **deps:** bump golang.org/x/net to v0.62.0 ([a706112](https://github.com/camilorivera/cert-manager-acm-sync/commit/a706112acd4e7c5228bebcc935bb40991088641b))
+* **dns:** harden cleanup, helm rendering and conflict handling ([c6f93b3](https://github.com/camilorivera/cert-manager-acm-sync/commit/c6f93b34ba54b804400d0a7a7d40ef6e55fcf4ab))
+* **dns:** tighten ownership, cleanup and conflict handling ([9aa4eb2](https://github.com/camilorivera/cert-manager-acm-sync/commit/9aa4eb2b1a5a2dea2de3ca2bdf562d5755d50d05)), closes [#46](https://github.com/camilorivera/cert-manager-acm-sync/issues/46)
+
+
+### Features
+
+* **dns:** add dnsimple and route53 dns providers ([d258472](https://github.com/camilorivera/cert-manager-acm-sync/commit/d25847287e016fcf99edbd0d5e2033610ee8d375))
+* **dns:** add optional dns record sync for route53 and dnsimple ([0015b2b](https://github.com/camilorivera/cert-manager-acm-sync/commit/0015b2bb14524a21bb70ed870dafe4d4039aedd6))
+* **dns:** add ownership-tracked record syncer with TXT registry ([a3c2978](https://github.com/camilorivera/cert-manager-acm-sync/commit/a3c29784013e62125e835f698d42f8a00b0d4807))
+* **dns:** sync certificate SANs to DNS records ([62995cf](https://github.com/camilorivera/cert-manager-acm-sync/commit/62995cf7297cdc86f0ce73e59cfd5d36230aff95))
+
 ## [0.7.5](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.7.4...v0.7.5) (2026-11-01)
 
 
