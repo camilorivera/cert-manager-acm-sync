@@ -22,6 +22,7 @@ const (
 	ActionUnmanagedOK     = "unmanaged_ok"
 	ActionConflict        = "conflict"
 	ActionSkippedWildcard = "skipped_wildcard"
+	ActionSkippedTarget   = "skipped_target"
 	ActionNoZone          = "no_zone"
 	ActionDeleted         = "deleted"
 	ActionError           = "error"
@@ -84,7 +85,7 @@ func (s *Syncer) Sync(ctx context.Context, req Request) ([]NameResult, []string,
 			continue
 		}
 		current[name] = true
-		res, keep, err := s.syncName(ctx, req, name)
+		res, keep, err := s.syncName(ctx, req, name, prev[name])
 		results = append(results, res)
 		if keep || (err != nil && prev[name]) {
 			owned = append(owned, name)
@@ -173,10 +174,13 @@ func (s *Syncer) load(ctx context.Context, resource, name string) (*state, error
 	return st, nil
 }
 
-func (s *Syncer) syncName(ctx context.Context, req Request, name string) (NameResult, bool, error) {
+func (s *Syncer) syncName(ctx context.Context, req Request, name string, tracked bool) (NameResult, bool, error) {
 	res := func(action, detail string) NameResult { return NameResult{Name: name, Action: action, Detail: detail} }
 	fail := func(err error) (NameResult, bool, error) { return res(ActionError, err.Error()), false, err }
 
+	if name == normalize(req.Target) {
+		return res(ActionSkippedTarget, "name equals the record target"), false, nil
+	}
 	if strings.HasPrefix(name, "*.") && s.WildcardPolicy != WildcardCreate {
 		return res(ActionSkippedWildcard, "wildcard policy is skip"), false, nil
 	}
@@ -232,6 +236,9 @@ func (s *Syncer) syncName(ctx context.Context, req Request, name string) (NameRe
 	if st.txt == ownerOurs {
 		if existing.Type == want.Type && sameTarget(existing.Target, want.Target) && (existing.TTL == want.TTL || existing.TTL == 0) {
 			return res(ActionUnchanged, ""), true, nil
+		}
+		if !tracked {
+			return res(ActionConflict, "existing "+string(existing.Type)+" points to "+existing.Target+" and was not created by this resource"), false, nil
 		}
 		if err := s.Provider.UpdateRecord(ctx, st.zone, *existing, want); err != nil {
 			return fail(err)

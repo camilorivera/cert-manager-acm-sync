@@ -653,6 +653,70 @@ func TestDNS_Finalizer_NotAddedToTerminatingHolder(t *testing.T) {
 	assert.NotContains(t, got.GetFinalizers(), annotations.DNSCleanupFinalizer)
 }
 
+func (h *dnsHarness) createTerminatingSecretHolder(t *testing.T) {
+	t.Helper()
+	h.createSynced(t, map[string]string{annotations.DNSRecords: dnsHost}, false)
+	secret := h.getSecret(t)
+	secret.Finalizers = []string{annotations.DNSCleanupFinalizer}
+	require.NoError(t, h.r.Update(context.Background(), &secret))
+	require.NoError(t, h.r.Delete(context.Background(), &secret))
+}
+
+func TestDNS_Cleanup_SecretDeletionKeepsRecordsWhileLiveCertificateExists(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteDelete, false)
+	h.createCert(t, map[string]string{annotations.DNSEnabled: "true"})
+	h.createTerminatingSecretHolder(t)
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+
+	require.NoError(t, err)
+	h.provider.AssertNotCalled(t, "DeleteRecords", mock.Anything, mock.Anything, mock.Anything)
+	var gone corev1.Secret
+	assert.True(t, apierrors.IsNotFound(h.r.Get(context.Background(), nn().NamespacedName, &gone)), "finalizer must be released")
+}
+
+func TestDNS_Cleanup_SecretDeletionStillCleansUpWhenCertificateIsTerminating(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteDelete, false)
+	h.expectOwnedRecord()
+	h.provider.On("DeleteRecords", mock.Anything, dnsZone, mock.Anything).Return(nil)
+	cert := h.createCert(t, map[string]string{annotations.DNSEnabled: "true"}, "example.com/other")
+	h.deleteCert(t, cert)
+	h.createTerminatingSecretHolder(t)
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+
+	require.NoError(t, err)
+	h.provider.AssertNumberOfCalls(t, "DeleteRecords", 2)
+}
+
+func TestDNS_Cleanup_SecretDeletionKeepsRecordsWhenOwnerReferenceCertificateIsLive(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteDelete, false)
+	h.createCert(t, map[string]string{annotations.DNSEnabled: "true"})
+	h.createSynced(t, map[string]string{annotations.DNSRecords: dnsHost}, true)
+	secret := h.getSecret(t)
+	secret.Finalizers = []string{annotations.DNSCleanupFinalizer}
+	require.NoError(t, h.r.Update(context.Background(), &secret))
+	require.NoError(t, h.r.Delete(context.Background(), &secret))
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+
+	require.NoError(t, err)
+	h.provider.AssertNotCalled(t, "DeleteRecords", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestDNS_Sync_SkippedForTerminatingHolder(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteDelete, false)
+	cert := h.createCert(t, map[string]string{annotations.DNSEnabled: "true"}, "example.com/other")
+	h.createSynced(t, nil, true)
+	h.deleteCert(t, cert)
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+
+	require.NoError(t, err)
+	h.provider.AssertNotCalled(t, "GetRecords", mock.Anything, mock.Anything, mock.Anything)
+	h.provider.AssertNotCalled(t, "CreateRecords", mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestNoDNS_MissingSecret_MakesNoCertificateCalls(t *testing.T) {
 	sc := runtime.NewScheme()
 	_ = corev1.AddToScheme(sc)

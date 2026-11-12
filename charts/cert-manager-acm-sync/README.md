@@ -163,7 +163,7 @@ dns:
       name: dnsimple-token
 ```
 
-The chart fails to render when the provider is unknown, no zones are set, `dns.ownerId` is empty or `default`, a route53 zone has no `id`, or dnsimple is missing `accountId` or `existingSecret.name`.
+The chart fails to render when the provider is unknown, no zones are set, `dns.ownerId` is empty or `default`, a route53 zone has no `id`, dnsimple is missing `accountId` (which must be numeric) or `existingSecret.name`.
 
 ### Example
 

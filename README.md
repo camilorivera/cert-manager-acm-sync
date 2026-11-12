@@ -119,13 +119,13 @@ For every record the controller writes a TXT record at `_acm-sync.<fqdn>` (`_acm
 | Unowned CNAME/ALIAS already pointing at the target | Left alone (`unmanaged_ok`), or adopted when `acm.sync/dns-adopt: "true"` (owner TXT written, record untouched). Adoption needs the existing record's type and TTL to match the requested ones, otherwise it is a conflict |
 | Unowned record pointing elsewhere, any other record type at the name (A, MX, NS, URL, SRV, ...), a TXT at a name that needs a CNAME, or a TXT owned by someone else | `DNSRecordConflict` warning, never modified. At a zone apex, MX/NS/TXT/CAA/SRV records do not conflict with the ALIAS |
 
-A CNAME and an ALIAS pointing at the same target are treated as equal. The names the controller owns are recorded in `acm.sync/dns-records` on the Secret and the Certificate.
+A CNAME and an ALIAS pointing at the same target are treated as equal. A record is only updated when its name is in `acm.sync/dns-records` (the controller created or adopted it); a name that has our owner TXT but is not tracked, and whose record differs from the requested one, is a conflict and is left untouched. A SAN equal to the record target is skipped. The names the controller owns are recorded in `acm.sync/dns-records` on the Secret and the Certificate.
 
 ### Apex, wildcards and deletion
 
 - **Apex**: a SAN equal to a managed zone always becomes an `ALIAS`. DNSimple uses its native ALIAS record. Route53 writes an alias `A` + `AAAA` pair, which supports CloudFront targets and targets inside the same zone only.
 - **Wildcards**: skipped by default. `--dns-wildcard-policy=create` manages them.
-- **Delete policy**: `--dns-delete-policy=retain` (default) never removes records. With `delete`, names dropped from the certificate are pruned, and deleting the Certificate (or the Secret when no Certificate owns it) removes its records and owner TXTs before it goes away. The controller adds the `acm.sync/dns-cleanup` finalizer for this, only on opted-in resources and only while the policy is `delete`; it removes it again if the policy goes back to `retain`. Records are only deleted where the owner TXT matches and the name holds exactly one CNAME/ALIAS (pointing at the requested target when pruning); otherwise only the owner TXT is removed and a conflict is reported.
+- **Delete policy**: `--dns-delete-policy=retain` (default) never removes records. With `delete`, names dropped from the certificate are pruned, and deleting the Certificate (or the Secret when no Certificate owns it) removes its records and owner TXTs before it goes away. The controller adds the `acm.sync/dns-cleanup` finalizer for this, only on opted-in resources and only while the policy is `delete`; it removes it again if the policy goes back to `retain`. Records are only deleted where the owner TXT matches and the name holds exactly one CNAME/ALIAS (pointing at the requested target when pruning); otherwise only the owner TXT is removed and a conflict is reported. When the Secret holds the finalizer but a live (non-terminating) Certificate still has it as `spec.secretName`, deleting the Secret only releases the finalizer and keeps the records, so forcing a re-issue does not delete live DNS. While the holder is being deleted no DNS sync runs.
 
 ### Limitations and operations
 
@@ -507,7 +507,7 @@ Scraped from `:8080/metrics`:
 | `acm_sync_last_sync_timestamp` | Gauge | `region`, `secret` | Unix timestamp of last successful sync |
 | `cloudfront_sync_total` | Counter | `action` | CloudFront sync operations (`synced`) |
 | `cloudfront_sync_errors_total` | Counter | `error_type` | Failed CloudFront sync operations (`get_config` / `update` / `extract_id` / `extract_sans`) |
-| `dns_sync_total` | Counter | `provider`, `action` | DNS outcomes per name (`created` / `updated` / `unchanged` / `adopted` / `unmanaged_ok` / `conflict` / `skipped_wildcard` / `no_zone` / `deleted` / `error`) |
+| `dns_sync_total` | Counter | `provider`, `action` | DNS outcomes per name (`created` / `updated` / `unchanged` / `adopted` / `unmanaged_ok` / `conflict` / `skipped_wildcard` / `skipped_target` / `no_zone` / `deleted` / `error`) |
 | `dns_sync_errors_total` | Counter | `provider`, `error_type` | Failed DNS operations (`sync` / `retryable` / `target` / `extract_sans`) |
 
 ### Kubernetes Events
@@ -523,7 +523,7 @@ The controller emits events on each managed Secret:
 | `CloudFrontSynced` | Normal | CloudFront distribution updated with new ACM cert ARN and aliases |
 | `CloudFrontSyncFailed` | Warning | CloudFront update failed (ACM import still succeeded) |
 | `DNSRecordCreated` / `DNSRecordUpdated` / `DNSRecordDeleted` / `DNSRecordAdopted` | Normal | DNS record created, updated, removed or adopted |
-| `DNSRecordSkipped` | Normal | Name not managed: wildcard skipped, no matching zone, no target, or an unowned record already points at the target |
+| `DNSRecordSkipped` | Normal | Name not managed: wildcard skipped, name equal to the target, no matching zone, no target, or an unowned record already points at the target |
 | `DNSRecordConflict` | Warning | Existing record or owner TXT not ours; left untouched |
 | `DNSSyncFailed` | Warning | DNS provider error (ACM import still succeeded) |
 

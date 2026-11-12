@@ -43,7 +43,7 @@ spec:
             {{- if .Values.dns.provider }}
             - "--dns-provider={{ .Values.dns.provider }}"
             - "--dns-zones={{ include "cert-manager-acm-sync.dnsZones" . }}"
-            - "--dns-owner-id={{ .Values.dns.ownerId }}"
+            - "--dns-owner-id={{ include "cert-manager-acm-sync.scalar" .Values.dns.ownerId }}"
             - "--dns-default-ttl={{ .Values.dns.defaultTTL | int64 }}"
             - "--dns-default-record-type={{ .Values.dns.defaultRecordType }}"
             - "--dns-wildcard-policy={{ .Values.dns.wildcardPolicy }}"
@@ -52,7 +52,7 @@ spec:
             - "--dns-default-target={{ . }}"
             {{- end }}
             {{- if eq .Values.dns.provider "dnsimple" }}
-            - "--dnsimple-account-id={{ .Values.dns.dnsimple.accountId | int64 }}"
+            - "--dnsimple-account-id={{ include "cert-manager-acm-sync.scalar" .Values.dns.dnsimple.accountId }}"
             {{- with .Values.dns.dnsimple.baseUrl }}
             - "--dnsimple-base-url={{ . }}"
             {{- end }}

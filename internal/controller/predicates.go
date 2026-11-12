@@ -95,7 +95,7 @@ type CertificateAnnotatedPredicate struct {
 var _ predicate.Predicate = CertificateAnnotatedPredicate{}
 
 func (CertificateAnnotatedPredicate) Create(e event.CreateEvent) bool {
-	return annotations.IsEnabled(e.Object.GetAnnotations())
+	return awaitingDNSCleanup(e.Object) || annotations.IsEnabled(e.Object.GetAnnotations())
 }
 
 func (CertificateAnnotatedPredicate) Update(e event.UpdateEvent) bool {

@@ -88,3 +88,13 @@ func TestCertificatePredicate_DeletionWithoutFinalizerSuppressed(t *testing.T) {
 	newC := predicateCert(map[string]string{annotations.Enabled: "true"}, nil, true)
 	assert.False(t, controller.CertificateAnnotatedPredicate{}.Update(event.UpdateEvent{ObjectOld: oldC, ObjectNew: newC}))
 }
+
+func TestCertificatePredicate_CreateOfTerminatingCertWithFinalizerPasses(t *testing.T) {
+	c := predicateCert(nil, []string{annotations.DNSCleanupFinalizer}, true)
+	assert.True(t, controller.CertificateAnnotatedPredicate{}.Create(event.CreateEvent{Object: c}))
+}
+
+func TestCertificatePredicate_CreateWithoutOptInOrFinalizerSuppressed(t *testing.T) {
+	c := predicateCert(nil, []string{annotations.DNSCleanupFinalizer}, false)
+	assert.False(t, controller.CertificateAnnotatedPredicate{}.Create(event.CreateEvent{Object: c}))
+}

@@ -105,7 +105,8 @@ func TestSync(t *testing.T) {
 			wantOwned:  []string{www},
 		},
 		{
-			name: "owned target differs is updated",
+			name:   "owned target differs is updated",
+			mutate: func(_ *dns.Syncer, r *dns.Request) { r.Previous = []string{www} },
 			setup: func(p *dns.MockProvider) {
 				old := cname(www, "old.cloudfront.net")
 				expectGet(p, www, []dns.Record{old}, txtFor(www, ownTXT))
@@ -115,7 +116,8 @@ func TestSync(t *testing.T) {
 			wantOwned:  []string{www},
 		},
 		{
-			name: "owned TTL differs is updated",
+			name:   "owned TTL differs is updated",
+			mutate: func(_ *dns.Syncer, r *dns.Request) { r.Previous = []string{www} },
 			setup: func(p *dns.MockProvider) {
 				old := wantCNAME
 				old.TTL = 60
@@ -126,7 +128,8 @@ func TestSync(t *testing.T) {
 			wantOwned:  []string{www},
 		},
 		{
-			name: "owned type differs is updated",
+			name:   "owned type differs is updated",
+			mutate: func(_ *dns.Syncer, r *dns.Request) { r.Previous = []string{www} },
 			setup: func(p *dns.MockProvider) {
 				old := wantCNAME
 				old.Type = dns.TypeALIAS
@@ -135,6 +138,27 @@ func TestSync(t *testing.T) {
 			},
 			wantAction: dns.ActionUpdated,
 			wantOwned:  []string{www},
+		},
+		{
+			name: "owned TXT but untracked and target differs is a conflict",
+			setup: func(p *dns.MockProvider) {
+				expectGet(p, www, []dns.Record{cname(www, "elsewhere.example.org")}, txtFor(www, ownTXT))
+			},
+			wantAction: dns.ActionConflict,
+		},
+		{
+			name: "owned TXT but untracked and identical is unchanged",
+			setup: func(p *dns.MockProvider) {
+				expectGet(p, www, []dns.Record{wantCNAME}, txtFor(www, ownTXT))
+			},
+			wantAction: dns.ActionUnchanged,
+			wantOwned:  []string{www},
+		},
+		{
+			name:       "name equal to target is skipped",
+			mutate:     func(_ *dns.Syncer, r *dns.Request) { r.Names = []string{"WWW.example.com."}; r.Target = www },
+			setup:      func(*dns.MockProvider) {},
+			wantAction: dns.ActionSkippedTarget,
 		},
 		{
 			name: "TXT for another resource is foreign",

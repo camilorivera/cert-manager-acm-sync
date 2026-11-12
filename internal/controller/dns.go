@@ -99,7 +99,7 @@ func (r *SecretReconciler) emitDNSResults(obj client.Object, results []dns.NameR
 			reason, evType = "DNSRecordDeleted", corev1.EventTypeNormal
 		case dns.ActionAdopted:
 			reason, evType = "DNSRecordAdopted", corev1.EventTypeNormal
-		case dns.ActionSkippedWildcard, dns.ActionNoZone, dns.ActionUnmanagedOK:
+		case dns.ActionSkippedWildcard, dns.ActionSkippedTarget, dns.ActionNoZone, dns.ActionUnmanagedOK:
 			reason, evType = "DNSRecordSkipped", corev1.EventTypeNormal
 		case dns.ActionConflict:
 			reason, evType = "DNSRecordConflict", corev1.EventTypeWarning
@@ -182,7 +182,8 @@ func (r *SecretReconciler) maybeSyncDNS(
 	wantFinalizer := r.DNS != nil && r.DNS.DeletePolicy == dns.DeleteDelete && optedIn
 
 	holder := r.dnsFinalizerHolder(secret, certOwner)
-	if !wantFinalizer || holder.GetDeletionTimestamp() == nil {
+	holderDeleting := holder.GetDeletionTimestamp() != nil
+	if !wantFinalizer || !holderDeleting {
 		if err := setFinalizer(ctx, r.Client, holder, wantFinalizer); err != nil {
 			if wantFinalizer {
 				r.reportDNSError(secret, fmt.Errorf("set %s finalizer: %w", annotations.DNSCleanupFinalizer, err), logger)
@@ -197,7 +198,7 @@ func (r *SecretReconciler) maybeSyncDNS(
 		}
 	}
 
-	if r.DNS == nil || !optedIn {
+	if r.DNS == nil || !optedIn || holderDeleting {
 		return false
 	}
 
@@ -307,6 +308,13 @@ func (r *SecretReconciler) finalizeDNS(ctx context.Context, secret *corev1.Secre
 	case certOwner != nil && certOwner.GetDeletionTimestamp() != nil && hasDNSFinalizer(certOwner):
 		holder = certOwner
 	case secret.DeletionTimestamp != nil && hasDNSFinalizer(secret):
+		live, err := r.hasLiveCertificate(ctx, secret, certOwner)
+		if err != nil {
+			return ctrl.Result{}, true, err
+		}
+		if live {
+			return ctrl.Result{}, true, setFinalizer(ctx, r.Client, secret, false)
+		}
 		holder = secret
 	default:
 		cert, err := r.terminatingCertificate(ctx, secret, certOwner)
@@ -353,6 +361,25 @@ func (r *SecretReconciler) listCertificates(ctx context.Context, namespace strin
 		return nil, err
 	}
 	return list.Items, nil
+}
+
+// hasLiveCertificate reports whether a non-terminating Certificate still
+// manages the Secret, in which case its records must outlive the Secret.
+func (r *SecretReconciler) hasLiveCertificate(ctx context.Context, secret *corev1.Secret, certOwner *unstructured.Unstructured) (bool, error) {
+	if certOwner != nil && certOwner.GetDeletionTimestamp() == nil {
+		return true, nil
+	}
+	items, err := r.listCertificates(ctx, secret.Namespace)
+	if err != nil {
+		return false, err
+	}
+	for i := range items {
+		name, _, _ := unstructured.NestedString(items[i].Object, "spec", "secretName")
+		if name == secret.Name && items[i].GetDeletionTimestamp() == nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (r *SecretReconciler) findTerminatingHolder(ctx context.Context, namespace, secretName string) (*unstructured.Unstructured, error) {

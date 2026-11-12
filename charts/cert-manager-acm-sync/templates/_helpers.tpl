@@ -60,17 +60,29 @@ Image tag — defaults to appVersion
 {{- end }}
 
 {{/*
+Renders a string or numeric value without float formatting.
+*/}}
+{{- define "cert-manager-acm-sync.scalar" -}}
+{{- if kindIs "float64" . -}}
+{{- . | int64 | toString -}}
+{{- else -}}
+{{- toString . -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Validates the dns values and renders --dns-zones as name[=id],...
 */}}
 {{- define "cert-manager-acm-sync.dnsZones" -}}
 {{- $dns := .Values.dns -}}
+{{- $ownerId := include "cert-manager-acm-sync.scalar" $dns.ownerId -}}
 {{- if not (has $dns.provider (list "route53" "dnsimple")) -}}
 {{- fail (printf "dns.provider must be route53 or dnsimple, got %q" $dns.provider) -}}
 {{- end -}}
-{{- if or (not $dns.ownerId) (eq (toString $dns.ownerId) "default") -}}
+{{- if or (not $dns.ownerId) (eq $ownerId "default") -}}
 {{- fail "dns.ownerId is required when dns.provider is set and must be unique per deployment, not \"default\"" -}}
 {{- end -}}
-{{- if or (contains "," (toString $dns.ownerId)) (contains "=" (toString $dns.ownerId)) -}}
+{{- if or (contains "," $ownerId) (contains "=" $ownerId) -}}
 {{- fail "dns.ownerId must not contain \",\" or \"=\"" -}}
 {{- end -}}
 {{- if not $dns.zones -}}
@@ -79,6 +91,9 @@ Validates the dns values and renders --dns-zones as name[=id],...
 {{- if eq $dns.provider "dnsimple" -}}
 {{- if not $dns.dnsimple.accountId -}}
 {{- fail "dns.dnsimple.accountId is required when dns.provider is dnsimple" -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9]+$" (include "cert-manager-acm-sync.scalar" $dns.dnsimple.accountId)) -}}
+{{- fail (printf "dns.dnsimple.accountId must be numeric, got %q" (include "cert-manager-acm-sync.scalar" $dns.dnsimple.accountId)) -}}
 {{- end -}}
 {{- if not $dns.dnsimple.existingSecret.name -}}
 {{- fail "dns.dnsimple.existingSecret.name is required when dns.provider is dnsimple" -}}
@@ -92,7 +107,7 @@ Validates the dns values and renders --dns-zones as name[=id],...
 {{- end -}}
 {{- end -}}
 {{- if .id -}}
-{{- $zones = append $zones (printf "%s=%s" .name .id) -}}
+{{- $zones = append $zones (printf "%s=%s" .name (include "cert-manager-acm-sync.scalar" .id)) -}}
 {{- else -}}
 {{- $zones = append $zones .name -}}
 {{- end -}}
