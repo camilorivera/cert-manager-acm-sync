@@ -35,9 +35,25 @@ spec:
             - "--leader-elect=true"
             - "--metrics-bind-address=:8080"
             - "--health-probe-bind-address=:8081"
+            # - "--enable-cloudfront-sync"
+            # - "--dns-provider=route53"            # or dnsimple; empty disables DNS sync
+            # - "--dns-zones=example.com=Z123EXAMPLE"  # name[=id]; id required for route53
+            # - "--dns-owner-id=<unique-id>"
+            # - "--dns-default-target=d111111abcdef8.cloudfront.net"
+            # - "--dns-default-ttl=300"
+            # - "--dns-default-record-type=CNAME"   # CNAME or ALIAS
+            # - "--dns-wildcard-policy=skip"        # skip or create
+            # - "--dns-delete-policy=retain"        # retain or delete
+            # - "--dnsimple-account-id=1234"
+            # - "--dnsimple-base-url=https://api.dnsimple.com"
           env:
             - name: AWS_REGION
               value: "us-east-1"
+            # - name: DNSIMPLE_TOKEN
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: dnsimple-token
+            #       key: token
           ports:
             - name: metrics
               containerPort: 8080

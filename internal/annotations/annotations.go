@@ -1,5 +1,7 @@
 package annotations
 
+import "strings"
+
 const (
 	Enabled                   = "acm.sync/enabled"
 	ARN                       = "acm.sync/arn"
@@ -7,6 +9,14 @@ const (
 	Region                    = "acm.sync/region"
 	LastSync                  = "acm.sync/last-sync"
 	CloudFrontDistributionARN = "acm.sync/cloudfront-distribution-arn"
+	DNSEnabled                = "acm.sync/dns-enabled"
+	DNSTarget                 = "acm.sync/dns-target"
+	DNSRecordType             = "acm.sync/dns-record-type"
+	DNSTTL                    = "acm.sync/dns-ttl"
+	DNSAdopt                  = "acm.sync/dns-adopt"
+	DNSRecords                = "acm.sync/dns-records"
+
+	DNSCleanupFinalizer = "acm.sync/dns-cleanup"
 
 	enabledValue = "true"
 )
@@ -19,6 +29,7 @@ var controllerWrittenAnnotations = map[string]bool{
 	ARN:         true,
 	Fingerprint: true,
 	LastSync:    true,
+	DNSRecords:  true,
 }
 
 func IsEnabled(ann map[string]string) bool {
@@ -35,6 +46,16 @@ func GetFingerprint(ann map[string]string) string {
 
 func GetRegion(ann map[string]string) string {
 	return ann[Region]
+}
+
+func GetDNSRecords(ann map[string]string) []string {
+	var out []string
+	for _, n := range strings.Split(ann[DNSRecords], ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func GetCloudFrontDistributionARN(ann map[string]string) string {

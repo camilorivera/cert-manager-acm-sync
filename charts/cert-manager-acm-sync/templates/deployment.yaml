@@ -40,9 +40,34 @@ spec:
             {{- if .Values.controller.enableCloudfrontSync }}
             - "--enable-cloudfront-sync"
             {{- end }}
+            {{- if .Values.dns.provider }}
+            - "--dns-provider={{ .Values.dns.provider }}"
+            - "--dns-zones={{ include "cert-manager-acm-sync.dnsZones" . }}"
+            - "--dns-owner-id={{ include "cert-manager-acm-sync.scalar" .Values.dns.ownerId }}"
+            - "--dns-default-ttl={{ .Values.dns.defaultTTL | int64 }}"
+            - "--dns-default-record-type={{ .Values.dns.defaultRecordType }}"
+            - "--dns-wildcard-policy={{ .Values.dns.wildcardPolicy }}"
+            - "--dns-delete-policy={{ .Values.dns.deletePolicy }}"
+            {{- with .Values.dns.defaultTarget }}
+            - "--dns-default-target={{ . }}"
+            {{- end }}
+            {{- if eq .Values.dns.provider "dnsimple" }}
+            - "--dnsimple-account-id={{ include "cert-manager-acm-sync.scalar" .Values.dns.dnsimple.accountId }}"
+            {{- with .Values.dns.dnsimple.baseUrl }}
+            - "--dnsimple-base-url={{ . }}"
+            {{- end }}
+            {{- end }}
+            {{- end }}
           env:
             - name: AWS_REGION
               value: {{ .Values.controller.defaultRegion | quote }}
+            {{- if eq .Values.dns.provider "dnsimple" }}
+            - name: DNSIMPLE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.dns.dnsimple.existingSecret.name }}
+                  key: {{ .Values.dns.dnsimple.existingSecret.key | default "token" }}
+            {{- end }}
           ports:
             - name: metrics
               containerPort: 8080

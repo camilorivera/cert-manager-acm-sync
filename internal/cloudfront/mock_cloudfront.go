@@ -27,3 +27,11 @@ func (m *MockCloudFrontAPI) UpdateDistribution(ctx context.Context, params *clou
 	}
 	return nil, args.Error(1)
 }
+
+func (m *MockCloudFrontAPI) GetDistribution(ctx context.Context, params *cloudfront.GetDistributionInput, _ ...func(*cloudfront.Options)) (*cloudfront.GetDistributionOutput, error) {
+	args := m.Called(ctx, params)
+	if out := args.Get(0); out != nil {
+		return out.(*cloudfront.GetDistributionOutput), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
