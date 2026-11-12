@@ -181,12 +181,20 @@ func (r *SecretReconciler) maybeSyncDNS(
 	optedIn := dnsAnnotation(secret, certOwner, annotations.DNSEnabled) == "true"
 	wantFinalizer := r.DNS != nil && r.DNS.DeletePolicy == dns.DeleteDelete && optedIn
 
-	if err := setFinalizer(ctx, r.Client, r.dnsFinalizerHolder(secret, certOwner), wantFinalizer); err != nil {
-		if wantFinalizer {
-			r.reportDNSError(secret, fmt.Errorf("set %s finalizer: %w", annotations.DNSCleanupFinalizer, err), logger)
-			return true
+	holder := r.dnsFinalizerHolder(secret, certOwner)
+	if !wantFinalizer || holder.GetDeletionTimestamp() == nil {
+		if err := setFinalizer(ctx, r.Client, holder, wantFinalizer); err != nil {
+			if wantFinalizer {
+				r.reportDNSError(secret, fmt.Errorf("set %s finalizer: %w", annotations.DNSCleanupFinalizer, err), logger)
+				return true
+			}
+			logger.Error(err, "failed to remove dns cleanup finalizer")
 		}
-		logger.Error(err, "failed to remove dns cleanup finalizer")
+	}
+	if certOwner != nil && secret.DeletionTimestamp == nil {
+		if err := setFinalizer(ctx, r.Client, secret, false); err != nil {
+			logger.Error(err, "failed to remove stale dns cleanup finalizer from secret")
+		}
 	}
 
 	if r.DNS == nil || !optedIn {
@@ -243,7 +251,8 @@ func (r *SecretReconciler) maybeSyncDNS(
 
 	retry := false
 	if syncErr != nil {
-		retry = r.reportDNSError(secret, syncErr, logger)
+		r.reportDNSError(secret, syncErr, logger)
+		retry = true
 	}
 	if err := r.writeDNSRecords(ctx, secret, certOwner, strings.Join(owned, ",")); err != nil {
 		logger.Error(err, "failed to persist dns-records annotation")
@@ -300,7 +309,14 @@ func (r *SecretReconciler) finalizeDNS(ctx context.Context, secret *corev1.Secre
 	case secret.DeletionTimestamp != nil && hasDNSFinalizer(secret):
 		holder = secret
 	default:
-		return ctrl.Result{}, false, nil
+		cert, err := r.terminatingCertificate(ctx, secret, certOwner)
+		if err != nil {
+			return ctrl.Result{}, true, err
+		}
+		if cert == nil {
+			return ctrl.Result{}, false, nil
+		}
+		holder = cert
 	}
 	names := annotations.GetDNSRecords(holder.GetAnnotations())
 	if len(names) == 0 {
@@ -324,24 +340,51 @@ func (r *SecretReconciler) cleanupDNS(ctx context.Context, holder client.Object,
 	return ctrl.Result{}, setFinalizer(ctx, r.Client, holder, false)
 }
 
+func (r *SecretReconciler) listCertificates(ctx context.Context, namespace string) ([]unstructured.Unstructured, error) {
+	if r.noCertificates {
+		return nil, nil
+	}
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(certGVK.GroupVersion().WithKind("CertificateList"))
+	if err := r.List(ctx, list, client.InNamespace(namespace)); err != nil {
+		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return list.Items, nil
+}
+
+func (r *SecretReconciler) findTerminatingHolder(ctx context.Context, namespace, secretName string) (*unstructured.Unstructured, error) {
+	items, err := r.listCertificates(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		cert := &items[i]
+		name, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName")
+		if name == secretName && cert.GetDeletionTimestamp() != nil && hasDNSFinalizer(cert) {
+			return cert, nil
+		}
+	}
+	return nil, nil
+}
+
+// terminatingCertificate finds a terminating Certificate holding the cleanup
+// finalizer by spec.secretName when the Secret carries no usable ownerReference.
+func (r *SecretReconciler) terminatingCertificate(ctx context.Context, secret *corev1.Secret, certOwner *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+	if r.DNS == nil || certOwner != nil {
+		return nil, nil
+	}
+	return r.findTerminatingHolder(ctx, secret.Namespace, secret.Name)
+}
+
 // finalizeOrphanedCertificate releases the cleanup finalizer on a terminating
 // Certificate whose Secret is already gone.
 func (r *SecretReconciler) finalizeOrphanedCertificate(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(certGVK.GroupVersion().WithKind("CertificateList"))
-	if err := r.Reader.List(ctx, list, client.InNamespace(req.Namespace)); err != nil {
-		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
-			return ctrl.Result{}, nil
-		}
+	cert, err := r.findTerminatingHolder(ctx, req.Namespace, req.Name)
+	if err != nil || cert == nil {
 		return ctrl.Result{}, err
 	}
-	for i := range list.Items {
-		cert := &list.Items[i]
-		name, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName")
-		if name != req.Name || cert.GetDeletionTimestamp() == nil || !hasDNSFinalizer(cert) {
-			continue
-		}
-		return r.cleanupDNS(ctx, cert, dnsResource(req.Namespace, req.Name), annotations.GetDNSRecords(cert.GetAnnotations()))
-	}
-	return ctrl.Result{}, nil
+	return r.cleanupDNS(ctx, cert, dnsResource(req.Namespace, req.Name), annotations.GetDNSRecords(cert.GetAnnotations()))
 }

@@ -25,7 +25,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	acmclient "github.com/camilorivera/cert-manager-acm-sync/internal/acm"
 	"github.com/camilorivera/cert-manager-acm-sync/internal/annotations"
@@ -349,7 +351,7 @@ func TestDNS_Failure_IsNonFatal(t *testing.T) {
 
 	res, err := h.r.Reconcile(context.Background(), nn())
 	require.NoError(t, err)
-	assert.Equal(t, 6*time.Hour, res.RequeueAfter)
+	assert.Equal(t, 5*time.Minute, res.RequeueAfter)
 	assert.Equal(t, dnsARN, h.getSecret(t).Annotations[annotations.ARN])
 	assert.True(t, hasEvent(h.eventReasons(), "DNSSyncFailed"))
 }
@@ -540,4 +542,148 @@ func TestDNS_Cleanup_CertificateDeletedAfterSecretIsGone(t *testing.T) {
 	h.provider.AssertNumberOfCalls(t, "DeleteRecords", 2)
 	_, err = h.getCert(t)
 	assert.True(t, apierrors.IsNotFound(err))
+}
+
+type failingGetReader struct {
+	client.Reader
+	err error
+}
+
+func (f failingGetReader) Get(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error {
+	return f.err
+}
+
+func TestDNS_OwnerLookupError_RequeuesWithError(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteDelete, false)
+	h.createSynced(t, map[string]string{annotations.DNSEnabled: "true"}, true)
+	h.r.Reader = failingGetReader{Reader: h.r.Reader, err: errors.New("apiserver down")}
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+
+	require.Error(t, err)
+	h.provider.AssertNotCalled(t, "GetRecords", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestDNS_OwnerNotFound_IsNotAnError(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteRetain, false)
+	h.createSynced(t, nil, true)
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+
+	require.NoError(t, err)
+}
+
+func TestNoDNS_OwnerLookupError_IsSwallowed(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteRetain, false)
+	h.r.DNS = nil
+	h.createSynced(t, nil, true)
+	h.r.Reader = failingGetReader{Reader: h.r.Reader, err: errors.New("apiserver down")}
+
+	res, err := h.r.Reconcile(context.Background(), nn())
+
+	require.NoError(t, err)
+	assert.Equal(t, 6*time.Hour, res.RequeueAfter)
+}
+
+func TestDNS_Cleanup_TerminatingCertificateWithoutOwnerReference(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteDelete, false)
+	h.expectOwnedRecord()
+	h.provider.On("DeleteRecords", mock.Anything, dnsZone, mock.Anything).Return(nil)
+	cert := h.createCert(t, map[string]string{annotations.DNSRecords: dnsHost}, annotations.DNSCleanupFinalizer)
+	h.createSynced(t, nil, false)
+	h.deleteCert(t, cert)
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+
+	require.NoError(t, err)
+	h.provider.AssertNumberOfCalls(t, "DeleteRecords", 2)
+	_, err = h.getCert(t)
+	assert.True(t, apierrors.IsNotFound(err), "certificate must be released")
+}
+
+func TestDNS_Cleanup_UnrelatedTerminatingCertificateIsIgnored(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteDelete, false)
+	cert := h.createCert(t, map[string]string{annotations.DNSRecords: dnsHost}, annotations.DNSCleanupFinalizer)
+	require.NoError(t, unstructured.SetNestedField(cert.Object, "other", "spec", "secretName"))
+	require.NoError(t, h.r.Update(context.Background(), cert))
+	h.createSynced(t, nil, false)
+	h.deleteCert(t, cert)
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+
+	require.NoError(t, err)
+	h.provider.AssertNotCalled(t, "DeleteRecords", mock.Anything, mock.Anything, mock.Anything)
+	got, err := h.getCert(t)
+	require.NoError(t, err)
+	assert.Contains(t, got.GetFinalizers(), annotations.DNSCleanupFinalizer)
+}
+
+func TestDNS_Finalizer_StaleSecretFinalizerRemovedWhenCertificateHolds(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteDelete, false)
+	h.expectFreshName()
+	h.expectCreate(dnsTarget)
+	h.createCert(t, map[string]string{annotations.DNSEnabled: "true"})
+	h.createSynced(t, nil, true)
+	secret := h.getSecret(t)
+	secret.Finalizers = []string{annotations.DNSCleanupFinalizer}
+	require.NoError(t, h.r.Update(context.Background(), &secret))
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+
+	require.NoError(t, err)
+	assert.NotContains(t, h.getSecret(t).Finalizers, annotations.DNSCleanupFinalizer)
+	cert, err := h.getCert(t)
+	require.NoError(t, err)
+	assert.Contains(t, cert.GetFinalizers(), annotations.DNSCleanupFinalizer)
+}
+
+func TestDNS_Finalizer_NotAddedToTerminatingHolder(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteDelete, false)
+	h.expectFreshName()
+	h.provider.On("CreateRecords", mock.Anything, dnsZone, mock.Anything).Return(nil)
+	cert := h.createCert(t, map[string]string{annotations.DNSEnabled: "true"}, "example.com/other")
+	h.createSynced(t, nil, true)
+	h.deleteCert(t, cert)
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+
+	require.NoError(t, err)
+	got, err := h.getCert(t)
+	require.NoError(t, err)
+	assert.NotContains(t, got.GetFinalizers(), annotations.DNSCleanupFinalizer)
+}
+
+func TestNoDNS_MissingSecret_MakesNoCertificateCalls(t *testing.T) {
+	sc := runtime.NewScheme()
+	_ = corev1.AddToScheme(sc)
+	var calls int
+	fc := fake.NewClientBuilder().WithScheme(sc).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error {
+			calls++
+			return errors.New("unexpected list")
+		},
+	}).Build()
+	r := &controller.SecretReconciler{Client: fc, Reader: fc, Recorder: events.NewFakeRecorder(8)}
+
+	res, err := r.Reconcile(context.Background(), nn())
+
+	require.NoError(t, err)
+	assert.Zero(t, res.RequeueAfter)
+	assert.Zero(t, calls)
+}
+
+func TestDNS_MissingSecret_ListErrorIsReturned(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteDelete, false)
+	sc := runtime.NewScheme()
+	_ = corev1.AddToScheme(sc)
+	fc := fake.NewClientBuilder().WithScheme(sc).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error {
+			return errors.New("boom")
+		},
+	}).Build()
+	h.r.Client, h.r.Reader = fc, fc
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+
+	require.Error(t, err)
 }

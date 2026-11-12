@@ -60,6 +60,7 @@ const (
 type state struct {
 	zone    Zone
 	records []Record
+	nameTXT int
 	txt     ownership
 	ours    []Record
 }
@@ -102,7 +103,7 @@ func (s *Syncer) Sync(ctx context.Context, req Request) ([]NameResult, []string,
 		if s.DeletePolicy != DeleteDelete {
 			continue
 		}
-		res, removed, err := s.remove(ctx, req.Resource, name)
+		res, removed, err := s.remove(ctx, req.Resource, name, req.Target)
 		if res != nil {
 			results = append(results, *res)
 		}
@@ -123,7 +124,7 @@ func (s *Syncer) Cleanup(ctx context.Context, resource string, names []string) (
 		errs    []error
 	)
 	for _, raw := range names {
-		res, _, err := s.remove(ctx, resource, normalize(raw))
+		res, _, err := s.remove(ctx, resource, normalize(raw), "")
 		if res != nil {
 			results = append(results, *res)
 		}
@@ -149,7 +150,11 @@ func (s *Syncer) load(ctx context.Context, resource, name string) (*state, error
 	}
 	st := &state{zone: zone}
 	for _, r := range recs {
-		if r.Type != TypeTXT {
+		switch {
+		case r.Type == TypeTXT:
+			st.nameTXT++
+		case name == zone.Name && CoexistsAtApex(r.Type):
+		default:
 			st.records = append(st.records, r)
 		}
 	}
@@ -195,6 +200,9 @@ func (s *Syncer) syncName(ctx context.Context, req Request, name string) (NameRe
 	raced := func(err error) bool { return errors.Is(err, ErrAlreadyExists) }
 
 	if len(st.records) == 0 {
+		if want.Type == TypeCNAME && st.nameTXT > 0 {
+			return res(ActionConflict, "name has TXT records, which cannot coexist with a CNAME"), false, nil
+		}
 		var recs []Record
 		switch st.txt {
 		case ownerAbsent:
@@ -243,6 +251,10 @@ func (s *Syncer) syncName(ctx context.Context, req Request, name string) (NameRe
 	if !req.Adopt {
 		return res(ActionUnmanagedOK, "already points at target"), false, nil
 	}
+	if existing.Type != want.Type || (existing.TTL != want.TTL && existing.TTL != 0) {
+		return res(ActionConflict, fmt.Sprintf("existing %s with TTL %d differs from requested %s with TTL %d; match them to adopt",
+			existing.Type, existing.TTL, want.Type, want.TTL)), false, nil
+	}
 	if err := s.Provider.CreateRecords(ctx, st.zone, []Record{txt}); err != nil {
 		if raced(err) {
 			return res(ActionConflict, "owner TXT appeared concurrently"), false, nil
@@ -252,8 +264,9 @@ func (s *Syncer) syncName(ctx context.Context, req Request, name string) (NameRe
 	return res(ActionAdopted, "already points at target"), true, nil
 }
 
-// remove deletes the record and owner TXT only when the TXT names this resource.
-func (s *Syncer) remove(ctx context.Context, resource, name string) (*NameResult, bool, error) {
+// remove deletes the owner TXT when it names this resource, and the record only
+// when it is the single CNAME or ALIAS we manage (matching target when known).
+func (s *Syncer) remove(ctx context.Context, resource, name, target string) (*NameResult, bool, error) {
 	res := func(action, detail string) *NameResult {
 		return &NameResult{Name: name, Action: action, Detail: detail}
 	}
@@ -267,13 +280,25 @@ func (s *Syncer) remove(ctx context.Context, resource, name string) (*NameResult
 	if st.txt != ownerOurs {
 		return res(ActionUnmanagedOK, "owner TXT is not ours, left in place"), true, nil
 	}
+	conflict := ""
 	if len(st.records) > 0 {
-		if err := s.Provider.DeleteRecords(ctx, st.zone, st.records); err != nil {
-			return res(ActionError, err.Error()), false, err
+		single := len(st.records) == 1 && (st.records[0].Type == TypeCNAME || st.records[0].Type == TypeALIAS)
+		switch {
+		case !single:
+			conflict = "name has records that are not a single CNAME or ALIAS, left in place"
+		case target != "" && !sameTarget(st.records[0].Target, target):
+			conflict = "record points to " + st.records[0].Target + ", left in place"
+		default:
+			if err := s.Provider.DeleteRecords(ctx, st.zone, st.records); err != nil {
+				return res(ActionError, err.Error()), false, err
+			}
 		}
 	}
 	if err := s.Provider.DeleteRecords(ctx, st.zone, st.ours); err != nil {
 		return res(ActionError, err.Error()), false, err
+	}
+	if conflict != "" {
+		return res(ActionConflict, conflict), true, nil
 	}
 	return res(ActionDeleted, ""), true, nil
 }

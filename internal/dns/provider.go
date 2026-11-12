@@ -13,6 +13,15 @@ const (
 	TypeTXT   RecordType = "TXT"
 )
 
+// CoexistsAtApex reports whether a record of type t can sit beside an ALIAS at a zone apex.
+func CoexistsAtApex(t RecordType) bool {
+	switch t {
+	case TypeTXT, "MX", "NS", "SOA", "CAA", "SRV", "SPF":
+		return true
+	}
+	return false
+}
+
 type Zone struct {
 	Name string
 	ID   string

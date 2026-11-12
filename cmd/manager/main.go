@@ -19,6 +19,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -70,8 +71,11 @@ func buildDNS(f dnsFlags, awsCfg aws.Config) (*dns.Syncer, controller.DNSDefault
 	if len(zones) == 0 {
 		return nil, controller.DNSDefaults{}, errors.New("--dns-zones is required when --dns-provider is set")
 	}
-	if f.ownerID == "" {
-		return nil, controller.DNSDefaults{}, errors.New("--dns-owner-id must not be empty")
+	if f.ownerID == "" || f.ownerID == "default" {
+		return nil, controller.DNSDefaults{}, errors.New(`--dns-owner-id is required and must be unique per deployment, not empty or "default"`)
+	}
+	if strings.ContainsAny(f.ownerID, ",=") {
+		return nil, controller.DNSDefaults{}, errors.New(`--dns-owner-id must not contain "," or "="`)
 	}
 	if f.defaultTTL <= 0 {
 		return nil, controller.DNSDefaults{}, errors.New("--dns-default-ttl must be positive")
@@ -152,8 +156,8 @@ func main() {
 		"DNS provider for record sync: route53 or dnsimple. Empty disables DNS sync. The dnsimple token is read from DNSIMPLE_TOKEN.")
 	flag.StringVar(&dnsCfg.zones, "dns-zones", "",
 		"Comma-separated managed zones as name[=id]. Required when --dns-provider is set; id is required for route53.")
-	flag.StringVar(&dnsCfg.ownerID, "dns-owner-id", "default",
-		"Owner ID written into the ownership TXT records; must be unique per controller deployment.")
+	flag.StringVar(&dnsCfg.ownerID, "dns-owner-id", "",
+		"Owner ID written into the ownership TXT records. Required when --dns-provider is set; must be unique per controller deployment and not \"default\".")
 	flag.StringVar(&dnsCfg.defaultTarget, "dns-default-target", "",
 		"Default record target when acm.sync/dns-target is not set. Falls back to the CloudFront distribution domain.")
 	flag.Int64Var(&dnsCfg.defaultTTL, "dns-default-ttl", 300,
@@ -197,6 +201,9 @@ func main() {
 		HealthProbeBindAddress: healthProbeAddr,
 		LeaderElection:         leaderElect,
 		LeaderElectionID:       leaderElectID,
+	}
+	if dnsCfg.provider != "" {
+		mgrOpts.Client = client.Options{Cache: &client.CacheOptions{Unstructured: true}}
 	}
 	if namespace != "" {
 		mgrOpts.Cache = cache.Options{

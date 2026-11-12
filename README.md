@@ -96,7 +96,7 @@ CloudFront sync is **non-fatal**: a failure emits a `CloudFrontSyncFailed` warni
 
 The controller can also create the DNS records for a certificate's SANs, so a hostname starts resolving to its CloudFront distribution (or any other target) without a separate DNS step. It is **off by default** and supports one provider per deployment: `route53` or `dnsimple`.
 
-It needs two opt-ins: the controller runs with `--dns-provider` (and `--dns-zones`), and each Secret or Certificate sets `acm.sync/dns-enabled: "true"` (Secret wins over Certificate). DNS sync runs after ACM and CloudFront, and is non-fatal: failures emit a `DNSSyncFailed` event and increment `dns_sync_errors_total`. Rate limits and 5xx responses are retried after 5 minutes.
+It needs two opt-ins: the controller runs with `--dns-provider` (and `--dns-zones`), and each Secret or Certificate sets `acm.sync/dns-enabled: "true"` (Secret wins over Certificate). DNS sync runs after ACM and CloudFront, and is non-fatal: failures emit a `DNSSyncFailed` event and increment `dns_sync_errors_total`. Any DNS error is retried after 5 minutes.
 
 ### Target
 
@@ -110,14 +110,14 @@ With none, the record is skipped with a `DNSRecordSkipped` event.
 
 ### Ownership
 
-For every record the controller writes a TXT record at `_acm-sync.<fqdn>` (`_acm-sync.<zone>` for the apex, `_acm-sync._wildcard.<parent>` for wildcards) with the value `heritage=cert-manager-acm-sync,owner=<owner-id>,resource=secret/<namespace>/<name>`. The controller only updates or deletes records whose TXT names its own owner ID and resource. Set a unique `--dns-owner-id` per controller deployment.
+For every record the controller writes a TXT record at `_acm-sync.<fqdn>` (`_acm-sync.<zone>` for the apex, `_acm-sync._wildcard.<parent>` for wildcards) with the value `heritage=cert-manager-acm-sync,owner=<owner-id>,resource=secret/<namespace>/<name>`. The controller only updates or deletes records whose TXT names its own owner ID and resource. `--dns-owner-id` is required whenever `--dns-provider` is set. It must be unique per controller deployment, must not be `default`, and must not contain `,` or `=`; two deployments sharing an ID can claim each other's records.
 
 | Existing state at the name | Result |
 |---|---|
 | Nothing | Owner TXT and record created |
 | Record and TXT are ours | Updated if type, target or TTL differ, otherwise unchanged |
-| Unowned CNAME/ALIAS already pointing at the target | Left alone (`unmanaged_ok`), or adopted when `acm.sync/dns-adopt: "true"` (owner TXT written, record untouched) |
-| Unowned record pointing elsewhere, other record types, or a TXT owned by someone else | `DNSRecordConflict` warning, never modified |
+| Unowned CNAME/ALIAS already pointing at the target | Left alone (`unmanaged_ok`), or adopted when `acm.sync/dns-adopt: "true"` (owner TXT written, record untouched). Adoption needs the existing record's type and TTL to match the requested ones, otherwise it is a conflict |
+| Unowned record pointing elsewhere, any other record type at the name (A, MX, NS, URL, SRV, ...), a TXT at a name that needs a CNAME, or a TXT owned by someone else | `DNSRecordConflict` warning, never modified. At a zone apex, MX/NS/TXT/CAA/SRV records do not conflict with the ALIAS |
 
 A CNAME and an ALIAS pointing at the same target are treated as equal. The names the controller owns are recorded in `acm.sync/dns-records` on the Secret and the Certificate.
 
@@ -125,7 +125,15 @@ A CNAME and an ALIAS pointing at the same target are treated as equal. The names
 
 - **Apex**: a SAN equal to a managed zone always becomes an `ALIAS`. DNSimple uses its native ALIAS record. Route53 writes an alias `A` + `AAAA` pair, which supports CloudFront targets and targets inside the same zone only.
 - **Wildcards**: skipped by default. `--dns-wildcard-policy=create` manages them.
-- **Delete policy**: `--dns-delete-policy=retain` (default) never removes records. With `delete`, names dropped from the certificate are pruned, and deleting the Certificate (or the Secret when no Certificate owns it) removes its records and owner TXTs before it goes away. The controller adds the `acm.sync/dns-cleanup` finalizer for this, only on opted-in resources and only while the policy is `delete`; it removes it again if the policy goes back to `retain`. Records are only deleted where the owner TXT matches.
+- **Delete policy**: `--dns-delete-policy=retain` (default) never removes records. With `delete`, names dropped from the certificate are pruned, and deleting the Certificate (or the Secret when no Certificate owns it) removes its records and owner TXTs before it goes away. The controller adds the `acm.sync/dns-cleanup` finalizer for this, only on opted-in resources and only while the policy is `delete`; it removes it again if the policy goes back to `retain`. Records are only deleted where the owner TXT matches and the name holds exactly one CNAME/ALIAS (pointing at the requested target when pruning); otherwise only the owner TXT is removed and a conflict is reported.
+
+### Limitations and operations
+
+- The `acm.sync/dns-cleanup` finalizer blocks deleting the Certificate while cleanup keeps failing non-retryably (for example a bad DNSimple token), and also if the controller is uninstalled. Release it manually with `kubectl -n <namespace> patch certificate <name> --type=merge -p '{"metadata":{"finalizers":null}}'` (or `patch secret <name>` when the Secret holds it), or remove just `acm.sync/dns-cleanup` from the list if other finalizers are present.
+- With `--dns-delete-policy=retain`, names dropped from the certificate are forgotten from `acm.sync/dns-records`, so switching to `delete` later will not prune them.
+- Route53 owner TXT values longer than 255 characters are not chunked (a very long namespace plus Secret name).
+- DNSimple apex lookups list the whole zone, which can hit rate limits on large zones.
+- The finalizer is not added to a Certificate that is already terminating.
 
 ### Provider setup
 
@@ -332,7 +340,7 @@ kubectl get secret my-service-tls -o jsonpath='{.metadata.annotations}' | jq
 | `controller.enableCloudfrontSync` | `false` | Enable CloudFront distribution alias sync after ACM imports |
 | `dns.provider` | `""` | DNS provider: `route53` or `dnsimple`. Empty disables DNS sync |
 | `dns.zones` | `[]` | Managed zones as `{name, id}`. `id` is required for route53 |
-| `dns.ownerId` | `default` | Owner ID written into ownership TXT records; unique per deployment |
+| `dns.ownerId` | `""` | Owner ID written into ownership TXT records. Required when `dns.provider` is set; unique per deployment, not `default` |
 | `dns.defaultTarget` | `""` | Record target when `acm.sync/dns-target` is not set |
 | `dns.defaultTTL` | `300` | Default record TTL in seconds |
 | `dns.defaultRecordType` | `CNAME` | `CNAME` or `ALIAS` |

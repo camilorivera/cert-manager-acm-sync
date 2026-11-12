@@ -538,3 +538,167 @@ func TestCleanupIgnoresDeletePolicyAndNoZone(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, results)
 }
+
+func TestSyncAdoptRequiresMatchingTypeAndTTL(t *testing.T) {
+	www := "www.example.com"
+	tests := []struct {
+		name     string
+		existing dns.Record
+	}{
+		{"type differs", dns.Record{Name: www, Type: dns.TypeALIAS, Target: target, TTL: 300}},
+		{"ttl differs", dns.Record{Name: www, Type: dns.TypeCNAME, Target: target, TTL: 60}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &dns.MockProvider{}
+			expectGet(p, www, []dns.Record{tt.existing})
+			req := baseReq(www)
+			req.Adopt = true
+
+			results, owned, err := newSyncer(p).Sync(context.Background(), req)
+
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, dns.ActionConflict, results[0].Action)
+			assert.Empty(t, owned)
+			p.AssertNotCalled(t, "CreateRecords", ctx, zone, mock.Anything)
+			p.AssertNotCalled(t, "UpdateRecord", ctx, zone, mock.Anything, mock.Anything)
+		})
+	}
+}
+
+func TestSyncAdoptKeepsAliasWithZeroTTL(t *testing.T) {
+	www := "www.example.com"
+	p := &dns.MockProvider{}
+	expectGet(p, www, []dns.Record{{Name: www, Type: dns.TypeALIAS, Target: target}})
+	p.On("CreateRecords", ctx, zone, []dns.Record{txtFor(www, ownTXT)}).Return(nil)
+	req := baseReq(www)
+	req.Adopt = true
+	req.Type = dns.TypeALIAS
+
+	results, owned, err := newSyncer(p).Sync(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, dns.ActionAdopted, results[0].Action)
+	assert.Equal(t, []string{www}, owned)
+}
+
+func TestSyncConflictsWithOtherRecordTypes(t *testing.T) {
+	www := "www.example.com"
+	tests := []struct {
+		name string
+		recs []dns.Record
+	}{
+		{"url record", []dns.Record{{Name: www, Type: "URL", Target: "https://example.net", TTL: 300}}},
+		{"mx record", []dns.Record{{Name: www, Type: "MX", Target: "mail.example.net", TTL: 300}}},
+		{"ns delegation", []dns.Record{{Name: www, Type: "NS", Target: "ns1.example.net", TTL: 300}}},
+		{"cname beside mx", []dns.Record{cname(www, target), {Name: www, Type: "MX", Target: "mail", TTL: 300}}},
+		{"txt beside cname we want to create", []dns.Record{{Name: www, Type: dns.TypeTXT, Target: "v=spf1 -all", TTL: 300}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &dns.MockProvider{}
+			expectGet(p, www, tt.recs)
+
+			results, owned, err := newSyncer(p).Sync(context.Background(), baseReq(www))
+
+			require.NoError(t, err)
+			assert.Equal(t, dns.ActionConflict, results[0].Action)
+			assert.Empty(t, owned)
+			p.AssertNotCalled(t, "CreateRecords", ctx, zone, mock.Anything)
+		})
+	}
+}
+
+func TestSyncApexCoexistsWithMailAndTXT(t *testing.T) {
+	apex := "example.com"
+	p := &dns.MockProvider{}
+	expectGet(p, apex, []dns.Record{
+		{Name: apex, Type: "MX", Target: "mail", TTL: 300},
+		{Name: apex, Type: dns.TypeTXT, Target: "v=spf1 -all", TTL: 300},
+		{Name: apex, Type: "NS", Target: "ns1", TTL: 300},
+	})
+	alias := dns.Record{Name: apex, Type: dns.TypeALIAS, Target: target, TTL: 300}
+	p.On("CreateRecords", ctx, zone, []dns.Record{txtFor(apex, ownTXT), alias}).Return(nil)
+
+	results, owned, err := newSyncer(p).Sync(context.Background(), baseReq(apex))
+
+	require.NoError(t, err)
+	assert.Equal(t, dns.ActionCreated, results[0].Action)
+	assert.Equal(t, []string{apex}, owned)
+}
+
+func TestSyncApexConflictsWithAddressRecords(t *testing.T) {
+	apex := "example.com"
+	p := &dns.MockProvider{}
+	expectGet(p, apex, []dns.Record{{Name: apex, Type: "A", Target: "1.1.1.1", TTL: 300}})
+
+	results, _, err := newSyncer(p).Sync(context.Background(), baseReq(apex))
+
+	require.NoError(t, err)
+	assert.Equal(t, dns.ActionConflict, results[0].Action)
+}
+
+func TestRemoveOnlyDeletesRecordWeManage(t *testing.T) {
+	gone := "gone.example.com"
+	tests := []struct {
+		name       string
+		target     string
+		recs       []dns.Record
+		wantRecord bool
+		wantAction string
+	}{
+		{"single cname matching target", target, []dns.Record{cname(gone, target)}, true, dns.ActionDeleted},
+		{"single cname unknown target", "", []dns.Record{cname(gone, "anything.example.net")}, true, dns.ActionDeleted},
+		{"single alias unknown target", "", []dns.Record{{Name: gone, Type: dns.TypeALIAS, Target: target}}, true, dns.ActionDeleted},
+		{"cname pointing elsewhere", target, []dns.Record{cname(gone, "other.example.net")}, false, dns.ActionConflict},
+		{"extra A record beside cname", "", []dns.Record{cname(gone, target), {Name: gone, Type: "A", Target: "1.1.1.1"}}, false, dns.ActionConflict},
+		{"only an A record", "", []dns.Record{{Name: gone, Type: "A", Target: "1.1.1.1"}}, false, dns.ActionConflict},
+		{"mx record", target, []dns.Record{{Name: gone, Type: "MX", Target: "mail"}}, false, dns.ActionConflict},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &dns.MockProvider{}
+			expectGet(p, gone, tt.recs, txtFor(gone, ownTXT))
+			if tt.wantRecord {
+				p.On("DeleteRecords", ctx, zone, tt.recs).Return(nil).Once()
+			}
+			p.On("DeleteRecords", ctx, zone, []dns.Record{txtFor(gone, ownTXT)}).Return(nil).Once()
+			s := newSyncer(p)
+			s.DeletePolicy = dns.DeleteDelete
+
+			var results []dns.NameResult
+			var err error
+			if tt.target == "" {
+				results, err = s.Cleanup(context.Background(), resource, []string{gone})
+			} else {
+				req := baseReq()
+				req.Previous = []string{gone}
+				results, _, err = s.Sync(context.Background(), req)
+			}
+
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, tt.wantAction, results[0].Action, results[0].Detail)
+			p.AssertExpectations(t)
+			p.AssertNumberOfCalls(t, "DeleteRecords", map[bool]int{true: 2, false: 1}[tt.wantRecord])
+		})
+	}
+}
+
+func TestRemoveKeepsNameTrackedWhenTXTDeleteFails(t *testing.T) {
+	gone := "gone.example.com"
+	p := &dns.MockProvider{}
+	expectGet(p, gone, []dns.Record{cname(gone, target)}, txtFor(gone, ownTXT))
+	p.On("DeleteRecords", ctx, zone, []dns.Record{cname(gone, target)}).Return(nil).Once()
+	p.On("DeleteRecords", ctx, zone, []dns.Record{txtFor(gone, ownTXT)}).Return(dns.ErrRetryable).Once()
+	s := newSyncer(p)
+	s.DeletePolicy = dns.DeleteDelete
+	req := baseReq()
+	req.Previous = []string{gone}
+
+	_, owned, err := s.Sync(context.Background(), req)
+
+	require.ErrorIs(t, err, dns.ErrRetryable)
+	assert.Equal(t, []string{gone}, owned)
+}

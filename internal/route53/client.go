@@ -136,13 +136,18 @@ func (p *Provider) GetRecords(ctx context.Context, zone dns.Zone, fqdn string) (
 	name := normalizeName(fqdn)
 	var out []dns.Record
 	seenAlias := map[string]bool{}
+	apex := name == normalizeName(zone.Name)
 	for _, rs := range sets {
 		ttl := aws.ToInt64(rs.TTL)
+		if apex && (rs.Type == r53types.RRTypeSoa || rs.Type == r53types.RRTypeNs) {
+			continue
+		}
 		if rs.AliasTarget != nil {
+			target := normalizeName(aws.ToString(rs.AliasTarget.DNSName))
 			if rs.Type != r53types.RRTypeA && rs.Type != r53types.RRTypeAaaa {
+				out = append(out, dns.Record{Name: name, Type: dns.RecordType(rs.Type), Target: target})
 				continue
 			}
-			target := normalizeName(aws.ToString(rs.AliasTarget.DNSName))
 			if !seenAlias[target] {
 				seenAlias[target] = true
 				out = append(out, dns.Record{Name: name, Type: dns.TypeALIAS, Target: target})
@@ -160,6 +165,8 @@ func (p *Provider) GetRecords(ctx context.Context, zone dns.Zone, fqdn string) (
 				out = append(out, dns.Record{Name: name, Type: typeA, Target: v, TTL: ttl})
 			case r53types.RRTypeAaaa:
 				out = append(out, dns.Record{Name: name, Type: typeAAAA, Target: v, TTL: ttl})
+			default:
+				out = append(out, dns.Record{Name: name, Type: dns.RecordType(rs.Type), Target: v, TTL: ttl})
 			}
 		}
 	}

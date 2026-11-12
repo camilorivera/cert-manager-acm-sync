@@ -38,7 +38,7 @@ spec:
             # - "--enable-cloudfront-sync"
             # - "--dns-provider=route53"            # or dnsimple; empty disables DNS sync
             # - "--dns-zones=example.com=Z123EXAMPLE"  # name[=id]; id required for route53
-            # - "--dns-owner-id=default"
+            # - "--dns-owner-id=<unique-id>"
             # - "--dns-default-target=d111111abcdef8.cloudfront.net"
             # - "--dns-default-ttl=300"
             # - "--dns-default-record-type=CNAME"   # CNAME or ALIAS

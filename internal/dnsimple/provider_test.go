@@ -46,7 +46,26 @@ func TestProvider_GetRecords(t *testing.T) {
 				{ID: 4, Name: "", Type: "SOA", Content: "x", SystemRecord: true},
 				{ID: 5, Name: "", Type: "MX", Content: "mail"},
 			},
-			want: []dns.Record{{Name: "example.com", Type: dns.TypeALIAS, Target: "d1.cloudfront.net", TTL: 300}},
+			want: []dns.Record{
+				{Name: "example.com", Type: dns.TypeALIAS, Target: "d1.cloudfront.net", TTL: 300},
+				{Name: "example.com", Type: "MX", Target: "mail"},
+			},
+		},
+		{
+			name: "other record types pass through",
+			fqdn: "www.example.com",
+			rel:  "www",
+			api: []dnsimple.Record{
+				{ID: 1, Name: "www", Type: "URL", Content: "https://example.net", TTL: 300},
+				{ID: 2, Name: "www", Type: "NS", Content: "ns1.example.net", TTL: 300},
+				{ID: 3, Name: "www", Type: "SRV", Content: "10 5 5060 sip.example.net", TTL: 300},
+				{ID: 4, Name: "www", Type: "A", Content: "1.1.1.1", TTL: 300, SystemRecord: true},
+			},
+			want: []dns.Record{
+				{Name: "www.example.com", Type: "URL", Target: "https://example.net", TTL: 300},
+				{Name: "www.example.com", Type: "NS", Target: "ns1.example.net", TTL: 300},
+				{Name: "www.example.com", Type: "SRV", Target: "10 5 5060 sip.example.net", TTL: 300},
+			},
 		},
 		{
 			name: "owner txt quotes stripped",
@@ -121,6 +140,26 @@ func TestProvider_CreateRecords(t *testing.T) {
 		api.AssertNotCalled(t, "CreateRecord", mock.Anything, mock.Anything, mock.Anything)
 	})
 
+	t.Run("existing mx at a non-apex name conflicts", func(t *testing.T) {
+		api := &dnsimple.MockAPI{}
+		api.On("ListRecords", mock.Anything, "example.com", "www").Return([]dnsimple.Record{{ID: 1, Name: "www", Type: "MX", Content: "mail"}}, nil)
+
+		err := dnsimple.NewProvider(api).CreateRecords(ctx, zone, []dns.Record{cname})
+		assert.ErrorIs(t, err, dns.ErrAlreadyExists)
+	})
+
+	t.Run("rolls back created records when a later create fails", func(t *testing.T) {
+		api := &dnsimple.MockAPI{}
+		api.On("ListRecords", mock.Anything, "example.com", mock.Anything).Return(nil, nil)
+		api.On("CreateRecord", mock.Anything, "example.com", dnsimple.RecordInput{Name: "_acm-sync.www", Type: "TXT", Content: "heritage=x", TTL: 300}).Return(dnsimple.Record{ID: 77}, nil).Once()
+		api.On("CreateRecord", mock.Anything, "example.com", dnsimple.RecordInput{Name: "www", Type: "CNAME", Content: "d1.cloudfront.net", TTL: 300}).Return(dnsimple.Record{}, errors.New("boom")).Once()
+		api.On("DeleteRecord", mock.Anything, "example.com", int64(77)).Return(nil).Once()
+
+		err := dnsimple.NewProvider(api).CreateRecords(ctx, zone, []dns.Record{txt, cname})
+		require.Error(t, err)
+		api.AssertExpectations(t)
+	})
+
 	t.Run("existing txt conflicts", func(t *testing.T) {
 		api := &dnsimple.MockAPI{}
 		api.On("ListRecords", mock.Anything, "example.com", "_acm-sync.www").Return([]dnsimple.Record{{ID: 1, Type: "TXT", Content: "other"}}, nil)
@@ -164,6 +203,19 @@ func TestProvider_UpdateRecord(t *testing.T) {
 
 		updated := dns.Record{Name: "www.example.com", Type: dns.TypeALIAS, Target: "new.example.net", TTL: 300}
 		require.NoError(t, dnsimple.NewProvider(api).UpdateRecord(ctx, zone, old, updated))
+		api.AssertExpectations(t)
+	})
+
+	t.Run("type change restores the old record when create fails", func(t *testing.T) {
+		api := &dnsimple.MockAPI{}
+		api.On("ListRecords", mock.Anything, "example.com", "www").Return(existing, nil)
+		api.On("DeleteRecord", mock.Anything, "example.com", int64(5)).Return(nil).Once()
+		api.On("CreateRecord", mock.Anything, "example.com", dnsimple.RecordInput{Name: "www", Type: "ALIAS", Content: "new.example.net", TTL: 300}).Return(dnsimple.Record{}, errors.New("boom")).Once()
+		api.On("CreateRecord", mock.Anything, "example.com", dnsimple.RecordInput{Name: "www", Type: "CNAME", Content: "old.example.net", TTL: 300}).Return(dnsimple.Record{}, nil).Once()
+
+		updated := dns.Record{Name: "www.example.com", Type: dns.TypeALIAS, Target: "new.example.net", TTL: 300}
+		err := dnsimple.NewProvider(api).UpdateRecord(ctx, zone, old, updated)
+		require.Error(t, err)
 		api.AssertExpectations(t)
 	})
 

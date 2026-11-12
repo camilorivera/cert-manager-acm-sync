@@ -27,7 +27,8 @@ dns:
   zones: []
   # - name: example.com
   #   id: Z123EXAMPLE
-  ownerId: default
+  # Required when provider is set; unique per deployment, not "default".
+  ownerId: ""
   defaultTarget: ""
   defaultTTL: 300
   # CNAME or ALIAS

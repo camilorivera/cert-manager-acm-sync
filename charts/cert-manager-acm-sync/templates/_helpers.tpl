@@ -67,6 +67,12 @@ Validates the dns values and renders --dns-zones as name[=id],...
 {{- if not (has $dns.provider (list "route53" "dnsimple")) -}}
 {{- fail (printf "dns.provider must be route53 or dnsimple, got %q" $dns.provider) -}}
 {{- end -}}
+{{- if or (not $dns.ownerId) (eq (toString $dns.ownerId) "default") -}}
+{{- fail "dns.ownerId is required when dns.provider is set and must be unique per deployment, not \"default\"" -}}
+{{- end -}}
+{{- if or (contains "," (toString $dns.ownerId)) (contains "=" (toString $dns.ownerId)) -}}
+{{- fail "dns.ownerId must not contain \",\" or \"=\"" -}}
+{{- end -}}
 {{- if not $dns.zones -}}
 {{- fail "dns.zones must list at least one zone when dns.provider is set" -}}
 {{- end -}}

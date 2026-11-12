@@ -109,6 +109,30 @@ func TestProvider_GetRecords(t *testing.T) {
 			},
 		},
 		{
+			name: "mx and srv pass through at a non-apex name",
+			fqdn: "www.example.com",
+			sets: []r53types.ResourceRecordSet{
+				rrSet("www.example.com.", r53types.RRTypeMx, 300, "10 mail.example.net."),
+				rrSet("www.example.com.", r53types.RRTypeSrv, 300, "10 5 5060 sip.example.net."),
+				rrSet("www.example.com.", r53types.RRTypeNs, 300, "ns1.example.net."),
+			},
+			want: []dns.Record{
+				{Name: "www.example.com", Type: "MX", Target: "10 mail.example.net.", TTL: 300},
+				{Name: "www.example.com", Type: "SRV", Target: "10 5 5060 sip.example.net.", TTL: 300},
+				{Name: "www.example.com", Type: "NS", Target: "ns1.example.net.", TTL: 300},
+			},
+		},
+		{
+			name: "apex keeps mx but hides soa and ns",
+			fqdn: "example.com",
+			sets: []r53types.ResourceRecordSet{
+				rrSet("example.com.", r53types.RRTypeMx, 300, "10 mail.example.net."),
+				rrSet("example.com.", r53types.RRTypeNs, 172800, "ns-1.awsdns.com."),
+				rrSet("example.com.", r53types.RRTypeSoa, 900, "x"),
+			},
+			want: []dns.Record{{Name: "example.com", Type: "MX", Target: "10 mail.example.net.", TTL: 300}},
+		},
+		{
 			name: "txt unquoted",
 			fqdn: "_acm-sync.www.example.com",
 			sets: []r53types.ResourceRecordSet{rrSet("_acm-sync.www.example.com.", r53types.RRTypeTxt, 300, `"heritage=x,owner=y"`)},

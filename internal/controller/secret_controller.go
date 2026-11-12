@@ -12,6 +12,7 @@ import (
 	awsacm "github.com/aws/aws-sdk-go-v2/service/acm"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
@@ -57,13 +58,16 @@ type SecretReconciler struct {
 	// disabled. Enable via --dns-provider.
 	DNS         *dns.Syncer
 	DNSDefaults DNSDefaults
+
+	noCertificates bool
 }
 
 var certGVK = schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"}
 
 // findCertificateOwner returns the cert-manager Certificate that owns the
-// Secret (via ownerReferences), or nil if none is found.
-func (r *SecretReconciler) findCertificateOwner(ctx context.Context, secret *corev1.Secret) *unstructured.Unstructured {
+// Secret (via ownerReferences), or nil if none is found. Only errors other
+// than NotFound or a missing CRD are returned.
+func (r *SecretReconciler) findCertificateOwner(ctx context.Context, secret *corev1.Secret) (*unstructured.Unstructured, error) {
 	for _, ref := range secret.OwnerReferences {
 		if ref.Kind != "Certificate" || !strings.HasPrefix(ref.APIVersion, "cert-manager.io/") {
 			continue
@@ -71,11 +75,14 @@ func (r *SecretReconciler) findCertificateOwner(ctx context.Context, secret *cor
 		cert := &unstructured.Unstructured{}
 		cert.SetGroupVersionKind(certGVK)
 		if err := r.Reader.Get(ctx, client.ObjectKey{Namespace: secret.Namespace, Name: ref.Name}, cert); err != nil {
-			return nil
+			if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+				return nil, nil
+			}
+			return nil, err
 		}
-		return cert
+		return cert, nil
 	}
-	return nil
+	return nil, nil
 }
 
 // certificateToSecret maps a cert-manager Certificate event to a reconcile
@@ -107,6 +114,9 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	var secret corev1.Secret
 	if err := r.Get(ctx, req.NamespacedName, &secret); err != nil {
 		if apierrors.IsNotFound(err) {
+			if r.DNS == nil {
+				return ctrl.Result{}, nil
+			}
 			return r.finalizeOrphanedCertificate(ctx, req)
 		}
 		return ctrl.Result{}, err
@@ -115,7 +125,13 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Look up the owning Certificate early — needed for both the enabled check
 	// and region fallback when the annotation lives on the Certificate rather
 	// than being propagated to the Secret via secretTemplate.
-	certOwner := r.findCertificateOwner(ctx, &secret)
+	certOwner, err := r.findCertificateOwner(ctx, &secret)
+	if err != nil {
+		if r.DNS != nil {
+			return ctrl.Result{}, err
+		}
+		logger.V(1).Info("certificate owner lookup failed", "error", err.Error())
+	}
 
 	if res, handled, err := r.finalizeDNS(ctx, &secret, certOwner); handled {
 		return res, err
@@ -389,7 +405,9 @@ func (r *SecretReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// directly to a Certificate (instead of secretTemplate.annotations)
 	// triggers reconciliation of the owned Secret. Skipped gracefully if the
 	// cert-manager CRD is not installed.
-	if _, err := mgr.GetRESTMapper().RESTMapping(certGVK.GroupKind(), certGVK.Version); err == nil {
+	if _, err := mgr.GetRESTMapper().RESTMapping(certGVK.GroupKind(), certGVK.Version); err != nil {
+		r.noCertificates = true
+	} else {
 		certObj := &unstructured.Unstructured{}
 		certObj.SetGroupVersionKind(certGVK)
 		b = b.Watches(

@@ -2,18 +2,14 @@ package dnsimple
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/camilorivera/cert-manager-acm-sync/internal/dns"
 )
 
-const (
-	typeA    = "A"
-	typeAAAA = "AAAA"
-
-	aliasCompanionPrefix = "ALIAS for "
-)
+const aliasCompanionPrefix = "ALIAS for "
 
 // Provider implements dns.Provider on top of the DNSimple records API.
 type Provider struct {
@@ -57,13 +53,17 @@ func relevant(r Record) bool {
 	if r.SystemRecord {
 		return false
 	}
-	switch r.Type {
-	case string(dns.TypeCNAME), string(dns.TypeALIAS), typeA, typeAAAA:
-		return true
-	case string(dns.TypeTXT):
+	if r.Type == string(dns.TypeTXT) {
 		return r.ParentID == 0 && !strings.HasPrefix(r.Content, aliasCompanionPrefix)
 	}
-	return false
+	return r.ParentID == 0
+}
+
+func blocks(rec dns.Record, e Record, apex bool) bool {
+	if rec.Type == dns.TypeTXT {
+		return e.Type == string(dns.TypeTXT)
+	}
+	return !apex || !dns.CoexistsAtApex(dns.RecordType(e.Type))
 }
 
 func toRecord(zone dns.Zone, r Record) dns.Record {
@@ -111,24 +111,34 @@ func (p *Provider) GetRecords(ctx context.Context, zone dns.Zone, fqdn string) (
 
 func (p *Provider) CreateRecords(ctx context.Context, zone dns.Zone, recs []dns.Record) error {
 	for _, rec := range recs {
-		_, existing, err := p.list(ctx, zone, rec.Name)
+		rel, existing, err := p.list(ctx, zone, rec.Name)
 		if err != nil {
 			return err
 		}
 		for _, e := range existing {
-			if rec.Type != dns.TypeTXT || e.Type == string(dns.TypeTXT) {
+			if blocks(rec, e, rel == "") {
 				return fmt.Errorf("%w: %s %s", dns.ErrAlreadyExists, e.Type, rec.Name)
 			}
+		}
+	}
+	var created []int64
+	rollback := func() {
+		for i := len(created) - 1; i >= 0; i-- {
+			_ = p.api.DeleteRecord(ctx, zoneRef(zone), created[i])
 		}
 	}
 	for _, rec := range recs {
 		rel, err := relativeName(zone, rec.Name)
 		if err != nil {
+			rollback()
 			return err
 		}
-		if _, err := p.api.CreateRecord(ctx, zoneRef(zone), toInput(rel, rec)); err != nil {
+		out, err := p.api.CreateRecord(ctx, zoneRef(zone), toInput(rel, rec))
+		if err != nil {
+			rollback()
 			return fmt.Errorf("create %s %s: %w", rec.Type, rec.Name, err)
 		}
+		created = append(created, out.ID)
 	}
 	return nil
 }
@@ -159,7 +169,11 @@ func (p *Provider) UpdateRecord(ctx context.Context, zone dns.Zone, old, updated
 			return fmt.Errorf("delete %s %s: %w", old.Type, old.Name, err)
 		}
 		if _, err := p.api.CreateRecord(ctx, zoneRef(zone), toInput(rel, updated)); err != nil {
-			return fmt.Errorf("create %s %s: %w", updated.Type, updated.Name, err)
+			err = fmt.Errorf("create %s %s: %w", updated.Type, updated.Name, err)
+			if _, rerr := p.api.CreateRecord(ctx, zoneRef(zone), toInput(rel, old)); rerr != nil {
+				return errors.Join(err, fmt.Errorf("restore %s %s: %w", old.Type, old.Name, rerr))
+			}
+			return err
 		}
 		return nil
 	}
