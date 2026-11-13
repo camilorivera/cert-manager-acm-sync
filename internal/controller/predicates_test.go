@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -97,4 +98,59 @@ func TestCertificatePredicate_CreateOfTerminatingCertWithFinalizerPasses(t *test
 func TestCertificatePredicate_CreateWithoutOptInOrFinalizerSuppressed(t *testing.T) {
 	c := predicateCert(nil, []string{annotations.DNSCleanupFinalizer}, false)
 	assert.False(t, controller.CertificateAnnotatedPredicate{}.Create(event.CreateEvent{Object: c}))
+}
+
+func certWithConditions(ann map[string]string, conds map[string]string) *unstructured.Unstructured {
+	c := predicateCert(ann, nil, false)
+	var list []any
+	for typ, status := range conds {
+		list = append(list, map[string]any{"type": typ, "status": status})
+	}
+	_ = unstructured.SetNestedSlice(c.Object, list, "status", "conditions")
+	return c
+}
+
+func TestCertificatePredicate_ConditionChangePassesForDNSEnabled(t *testing.T) {
+	ann := map[string]string{annotations.Enabled: "true", annotations.DNSEnabled: "true"}
+	oldC := certWithConditions(ann, map[string]string{"Ready": "True", "Issuing": "True"})
+	newC := certWithConditions(ann, map[string]string{"Ready": "True", "Issuing": "False"})
+	assert.True(t, controller.CertificateAnnotatedPredicate{}.Update(event.UpdateEvent{ObjectOld: oldC, ObjectNew: newC}))
+}
+
+func TestCertificatePredicate_ConditionChangePassesForDNSEnabledViaSecretTemplate(t *testing.T) {
+	ann := map[string]string{annotations.Enabled: "true"}
+	oldC := certWithConditions(ann, map[string]string{"Ready": "False"})
+	newC := certWithConditions(ann, map[string]string{"Ready": "True"})
+	for _, c := range []*unstructured.Unstructured{oldC, newC} {
+		require.NoError(t, unstructured.SetNestedStringMap(c.Object, map[string]string{annotations.DNSEnabled: "true"}, "spec", "secretTemplate", "annotations"))
+	}
+	assert.True(t, controller.CertificateAnnotatedPredicate{}.Update(event.UpdateEvent{ObjectOld: oldC, ObjectNew: newC}))
+}
+
+func TestCertificatePredicate_ConditionChangeSuppressedWithoutDNS(t *testing.T) {
+	ann := map[string]string{annotations.Enabled: "true"}
+	oldC := certWithConditions(ann, map[string]string{"Ready": "False"})
+	newC := certWithConditions(ann, map[string]string{"Ready": "True"})
+	assert.False(t, controller.CertificateAnnotatedPredicate{}.Update(event.UpdateEvent{ObjectOld: oldC, ObjectNew: newC}))
+}
+
+func TestCertificatePredicate_UnchangedStatusSuppressed(t *testing.T) {
+	ann := map[string]string{annotations.Enabled: "true", annotations.DNSEnabled: "true"}
+	oldC := certWithConditions(ann, map[string]string{"Ready": "True"})
+	newC := certWithConditions(ann, map[string]string{"Ready": "True"})
+	assert.False(t, controller.CertificateAnnotatedPredicate{}.Update(event.UpdateEvent{ObjectOld: oldC, ObjectNew: newC}))
+}
+
+func TestCertificatePredicate_IssuingConditionRemovedPasses(t *testing.T) {
+	ann := map[string]string{annotations.Enabled: "true", annotations.DNSEnabled: "true"}
+	oldC := certWithConditions(ann, map[string]string{"Ready": "True", "Issuing": "True"})
+	newC := certWithConditions(ann, map[string]string{"Ready": "True"})
+	assert.True(t, controller.CertificateAnnotatedPredicate{}.Update(event.UpdateEvent{ObjectOld: oldC, ObjectNew: newC}))
+}
+
+func TestCertificatePredicate_DNSEnabledWithoutOptInSuppressed(t *testing.T) {
+	ann := map[string]string{annotations.DNSEnabled: "true"}
+	oldC := certWithConditions(ann, map[string]string{"Ready": "False"})
+	newC := certWithConditions(ann, map[string]string{"Ready": "True"})
+	assert.False(t, controller.CertificateAnnotatedPredicate{}.Update(event.UpdateEvent{ObjectOld: oldC, ObjectNew: newC}))
 }

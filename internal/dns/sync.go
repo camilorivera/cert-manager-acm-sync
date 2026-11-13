@@ -25,6 +25,7 @@ const (
 	ActionSkippedTarget   = "skipped_target"
 	ActionNoZone          = "no_zone"
 	ActionDeleted         = "deleted"
+	ActionReleased        = "released"
 	ActionError           = "error"
 )
 
@@ -102,6 +103,11 @@ func (s *Syncer) Sync(ctx context.Context, req Request) ([]NameResult, []string,
 		}
 		current[name] = true
 		if s.DeletePolicy != DeleteDelete {
+			results = append(results, NameResult{
+				Name:   name,
+				Action: ActionReleased,
+				Detail: "no longer requested; record and owner TXT left in DNS and no longer tracked",
+			})
 			continue
 		}
 		res, removed, err := s.remove(ctx, req.Resource, name, req.Target)
