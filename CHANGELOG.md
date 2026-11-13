@@ -1,3 +1,11 @@
+## [0.8.1](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.8.0...v0.8.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* **dns:** defer DNS sync while the certificate is stale or not Ready ([e9fb136](https://github.com/camilorivera/cert-manager-acm-sync/commit/e9fb1363f8756e6fa33286f6d2452e1806bff50c))
+* **dns:** ignore unrelated certificate annotation for dns deferral ([ca47d34](https://github.com/camilorivera/cert-manager-acm-sync/commit/ca47d348bdd35ff514e0860879170789ab7c8186))
+
 # [0.8.0](https://github.com/camilorivera/cert-manager-acm-sync/compare/v0.7.5...v0.8.0) (2026-11-12)
 
 
