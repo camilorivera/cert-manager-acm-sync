@@ -222,8 +222,12 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				logger.Error(err, "failed to backfill ARN annotation onto Certificate", "arn", existingARN)
 			}
 		}
-		if r.maybeSyncDNS(ctx, &secret, certOwner, certPEM, logger) {
-			return ctrl.Result{RequeueAfter: dnsRetryInterval}, nil
+		d, err := r.maybeSyncDNS(ctx, &secret, certOwner, certPEM, logger)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if d > 0 {
+			return ctrl.Result{RequeueAfter: d}, nil
 		}
 		return ctrl.Result{RequeueAfter: periodicRequeueInterval}, nil
 	}
@@ -315,8 +319,12 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{RequeueAfter: 2 * time.Minute}, nil
 	}
 
-	if r.maybeSyncDNS(ctx, &secret, certOwner, certPEM, logger) {
-		return ctrl.Result{RequeueAfter: dnsRetryInterval}, nil
+	d, err := r.maybeSyncDNS(ctx, &secret, certOwner, certPEM, logger)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if d > 0 {
+		return ctrl.Result{RequeueAfter: d}, nil
 	}
 
 	return ctrl.Result{RequeueAfter: periodicRequeueInterval}, nil

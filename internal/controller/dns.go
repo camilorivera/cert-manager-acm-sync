@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -27,8 +29,11 @@ import (
 
 const (
 	dnsRetryInterval = 5 * time.Minute
+	dnsDeferInterval = time.Minute
 	dnsAction        = "SyncingDNS"
 	defaultDNSTTL    = 300
+
+	certManagerCertificateName = "cert-manager.io/certificate-name"
 )
 
 // DNSDefaults are the controller-wide fallbacks for the acm.sync/dns-* annotations.
@@ -103,6 +108,8 @@ func (r *SecretReconciler) emitDNSResults(obj client.Object, results []dns.NameR
 			reason, evType = "DNSRecordSkipped", corev1.EventTypeNormal
 		case dns.ActionConflict:
 			reason, evType = "DNSRecordConflict", corev1.EventTypeWarning
+		case dns.ActionReleased:
+			reason, evType = "DNSRecordReleased", corev1.EventTypeWarning
 		default:
 			continue
 		}
@@ -169,15 +176,100 @@ func (r *SecretReconciler) dnsTTL(secret *corev1.Secret, certOwner *unstructured
 	return ttl, nil
 }
 
-// maybeSyncDNS reconciles DNS records for the Secret's SANs. It returns true
-// when the caller should retry in dnsRetryInterval. Failures are never fatal.
+func normalizeDNSNames(names []string) []string {
+	set := map[string]struct{}{}
+	for _, n := range names {
+		n = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(n)), ".")
+		if n != "" {
+			set[n] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for n := range set {
+		out = append(out, n)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// acceptedDNSNameSets returns the SAN sets an issued certificate may carry:
+// spec.dnsNames, or spec.dnsNames plus spec.commonName for issuers that add
+// it. With no dnsNames the CommonName alone, mirroring fingerprint.ExtractSANs.
+func acceptedDNSNameSets(cert *unstructured.Unstructured) [][]string {
+	names, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
+	cn, _, _ := unstructured.NestedString(cert.Object, "spec", "commonName")
+	if len(names) == 0 && cn != "" {
+		names = []string{cn}
+	}
+	sets := [][]string{normalizeDNSNames(names)}
+	if cn != "" {
+		sets = append(sets, normalizeDNSNames(append(slices.Clone(names), cn)))
+	}
+	return sets
+}
+
+func certificateCondition(cert *unstructured.Unstructured, condType string) string {
+	conds, _, _ := unstructured.NestedSlice(cert.Object, "status", "conditions")
+	for _, c := range conds {
+		m, ok := c.(map[string]any)
+		if !ok || m["type"] != condType {
+			continue
+		}
+		status, _ := m["status"].(string)
+		return status
+	}
+	return ""
+}
+
+// dnsDeferReason returns why DNS sync must wait for cert-manager to finish
+// issuing, or "" when the Secret's certificate is current.
+func dnsDeferReason(cert *unstructured.Unstructured, sans []string) string {
+	switch {
+	case certificateCondition(cert, "Issuing") == string(metav1.ConditionTrue):
+		return "certificate is being issued"
+	case certificateCondition(cert, "Ready") != string(metav1.ConditionTrue):
+		return "certificate is not Ready"
+	}
+	got := normalizeDNSNames(sans)
+	for _, want := range acceptedDNSNameSets(cert) {
+		if slices.Equal(got, want) {
+			return ""
+		}
+	}
+	return "certificate SANs differ from spec.dnsNames"
+}
+
+// maybeSyncDNS reconciles DNS records for the Secret's SANs. It returns how
+// long to wait before retrying, or 0 for no retry. Failures are never fatal.
+// deferCertificate returns the Certificate whose issuance state gates DNS sync:
+// the owner, else the one named by the cert-manager.io/certificate-name
+// annotation. nil means no gating.
+func (r *SecretReconciler) deferCertificate(ctx context.Context, secret *corev1.Secret, certOwner *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+	if certOwner != nil {
+		return certOwner, nil
+	}
+	name := secret.Annotations[certManagerCertificateName]
+	if name == "" || r.noCertificates {
+		return nil, nil
+	}
+	cert := &unstructured.Unstructured{}
+	cert.SetGroupVersionKind(certGVK)
+	if err := r.Reader.Get(ctx, client.ObjectKey{Namespace: secret.Namespace, Name: name}, cert); err != nil {
+		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return cert, nil
+}
+
 func (r *SecretReconciler) maybeSyncDNS(
 	ctx context.Context,
 	secret *corev1.Secret,
 	certOwner *unstructured.Unstructured,
 	certPEM []byte,
 	logger logr.Logger,
-) bool {
+) (time.Duration, error) {
 	optedIn := dnsAnnotation(secret, certOwner, annotations.DNSEnabled) == "true"
 	wantFinalizer := r.DNS != nil && r.DNS.DeletePolicy == dns.DeleteDelete && optedIn
 
@@ -187,7 +279,7 @@ func (r *SecretReconciler) maybeSyncDNS(
 		if err := setFinalizer(ctx, r.Client, holder, wantFinalizer); err != nil {
 			if wantFinalizer {
 				r.reportDNSError(secret, fmt.Errorf("set %s finalizer: %w", annotations.DNSCleanupFinalizer, err), logger)
-				return true
+				return dnsRetryInterval, nil
 			}
 			logger.Error(err, "failed to remove dns cleanup finalizer")
 		}
@@ -199,12 +291,12 @@ func (r *SecretReconciler) maybeSyncDNS(
 	}
 
 	if r.DNS == nil || !optedIn || holderDeleting {
-		return false
+		return 0, nil
 	}
 
-	skip := func(format string, args ...any) bool {
+	skip := func(format string, args ...any) (time.Duration, error) {
 		r.Recorder.Eventf(secret, nil, corev1.EventTypeNormal, "DNSRecordSkipped", dnsAction, format, args...)
-		return false
+		return 0, nil
 	}
 
 	sans, err := fingerprint.ExtractSANs(certPEM)
@@ -212,7 +304,20 @@ func (r *SecretReconciler) maybeSyncDNS(
 		metrics.DNSSyncErrorsTotal.WithLabelValues(r.dnsProviderName(), "extract_sans").Inc()
 		r.Recorder.Eventf(secret, nil, corev1.EventTypeWarning, "DNSSyncFailed", dnsAction,
 			"failed to extract SANs for DNS sync: %v", err)
-		return false
+		return 0, nil
+	}
+
+	issuing, err := r.deferCertificate(ctx, secret, certOwner)
+	if err != nil {
+		return 0, err
+	}
+	if issuing != nil {
+		if reason := dnsDeferReason(issuing, sans); reason != "" {
+			metrics.DNSSyncTotal.WithLabelValues(r.dnsProviderName(), "deferred").Inc()
+			r.Recorder.Eventf(secret, nil, corev1.EventTypeNormal, "DNSSyncDeferred", dnsAction,
+				"DNS sync deferred: %s; retrying in %s", reason, dnsDeferInterval)
+			return dnsDeferInterval, nil
+		}
 	}
 
 	target, err := r.dnsTarget(ctx, secret, certOwner)
@@ -220,7 +325,7 @@ func (r *SecretReconciler) maybeSyncDNS(
 		metrics.DNSSyncErrorsTotal.WithLabelValues(r.dnsProviderName(), "target").Inc()
 		logger.Error(err, "dns target lookup failed")
 		r.Recorder.Eventf(secret, nil, corev1.EventTypeWarning, "DNSSyncFailed", dnsAction, err.Error())
-		return true
+		return dnsRetryInterval, nil
 	}
 	if target == "" {
 		return skip("no DNS target: set %s, --dns-default-target or a CloudFront distribution", annotations.DNSTarget)
@@ -250,16 +355,16 @@ func (r *SecretReconciler) maybeSyncDNS(
 	})
 	r.emitDNSResults(secret, results)
 
-	retry := false
+	retry := time.Duration(0)
 	if syncErr != nil {
 		r.reportDNSError(secret, syncErr, logger)
-		retry = true
+		retry = dnsRetryInterval
 	}
 	if err := r.writeDNSRecords(ctx, secret, certOwner, strings.Join(owned, ",")); err != nil {
 		logger.Error(err, "failed to persist dns-records annotation")
-		return true
+		return dnsRetryInterval, nil
 	}
-	return retry
+	return retry, nil
 }
 
 func (r *SecretReconciler) writeDNSRecords(ctx context.Context, secret *corev1.Secret, certOwner *unstructured.Unstructured, value string) error {

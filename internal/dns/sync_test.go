@@ -419,7 +419,7 @@ func TestSyncPrune(t *testing.T) {
 			setup: func(p *dns.MockProvider) {
 				expectGet(p, keep, []dns.Record{cname(keep, target)}, txtFor(keep, ownTXT))
 			},
-			wantActions: []string{dns.ActionUnchanged},
+			wantActions: []string{dns.ActionUnchanged, dns.ActionReleased},
 			wantOwned:   []string{keep},
 		},
 		{
@@ -725,4 +725,23 @@ func TestRemoveKeepsNameTrackedWhenTXTDeleteFails(t *testing.T) {
 
 	require.ErrorIs(t, err, dns.ErrRetryable)
 	assert.Equal(t, []string{gone}, owned)
+}
+
+func TestSyncRetainReleasesTrackedName(t *testing.T) {
+	keep, gone := "keep.example.com", "gone.example.com"
+	p := &dns.MockProvider{}
+	expectGet(p, keep, []dns.Record{cname(keep, target)}, txtFor(keep, ownTXT))
+	s := newSyncer(p)
+	req := baseReq(keep)
+	req.Previous = []string{keep, gone}
+
+	results, owned, err := s.Sync(context.Background(), req)
+
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, dns.NameResult{Name: gone, Action: dns.ActionReleased, Detail: results[1].Detail}, results[1])
+	assert.Contains(t, results[1].Detail, "left in DNS")
+	assert.Equal(t, []string{keep}, owned)
+	p.AssertNotCalled(t, "DeleteRecords", ctx, ctx, ctx)
+	p.AssertExpectations(t)
 }

@@ -96,7 +96,7 @@ CloudFront sync is **non-fatal**: a failure emits a `CloudFrontSyncFailed` warni
 
 The controller can also create the DNS records for a certificate's SANs, so a hostname starts resolving to its CloudFront distribution (or any other target) without a separate DNS step. It is **off by default** and supports one provider per deployment: `route53` or `dnsimple`.
 
-It needs two opt-ins: the controller runs with `--dns-provider` (and `--dns-zones`), and each Secret or Certificate sets `acm.sync/dns-enabled: "true"` (Secret wins over Certificate). DNS sync runs after ACM and CloudFront, and is non-fatal: failures emit a `DNSSyncFailed` event and increment `dns_sync_errors_total`. Any DNS error is retried after 5 minutes.
+It needs two opt-ins: the controller runs with `--dns-provider` (and `--dns-zones`), and each Secret or Certificate sets `acm.sync/dns-enabled: "true"` (Secret wins over Certificate). DNS sync runs after ACM and CloudFront, and is non-fatal: failures emit a `DNSSyncFailed` event and increment `dns_sync_errors_total`. Any DNS error is retried after 5 minutes. While the owning Certificate is being issued, is not Ready, or its `spec.dnsNames` differ from the Secret's certificate SANs, DNS sync is deferred (`DNSSyncDeferred` event, retried after 1 minute) so a certificate that is about to be replaced never creates records for names being removed. With `--dns-delete-policy=retain`, a tracked name that is no longer requested is dropped from `acm.sync/dns-records` and a `DNSRecordReleased` warning reports that its record and owner TXT were left in DNS. The owning Certificate used for deferral is found through the Secret's ownerReference or its `cert-manager.io/certificate-name` annotation.
 
 ### Target
 
@@ -130,7 +130,7 @@ A CNAME and an ALIAS pointing at the same target are treated as equal. A record 
 ### Limitations and operations
 
 - The `acm.sync/dns-cleanup` finalizer blocks deleting the Certificate while cleanup keeps failing non-retryably (for example a bad DNSimple token), and also if the controller is uninstalled. Release it manually with `kubectl -n <namespace> patch certificate <name> --type=merge -p '{"metadata":{"finalizers":null}}'` (or `patch secret <name>` when the Secret holds it), or remove just `acm.sync/dns-cleanup` from the list if other finalizers are present.
-- With `--dns-delete-policy=retain`, names dropped from the certificate are forgotten from `acm.sync/dns-records`, so switching to `delete` later will not prune them.
+- With `--dns-delete-policy=retain`, names dropped from the certificate are forgotten from `acm.sync/dns-records`, so switching to `delete` later will not prune them (a `DNSRecordReleased` warning names each one).
 - Route53 owner TXT values longer than 255 characters are not chunked (a very long namespace plus Secret name).
 - DNSimple apex lookups list the whole zone, which can hit rate limits on large zones.
 - The finalizer is not added to a Certificate that is already terminating.
@@ -507,7 +507,7 @@ Scraped from `:8080/metrics`:
 | `acm_sync_last_sync_timestamp` | Gauge | `region`, `secret` | Unix timestamp of last successful sync |
 | `cloudfront_sync_total` | Counter | `action` | CloudFront sync operations (`synced`) |
 | `cloudfront_sync_errors_total` | Counter | `error_type` | Failed CloudFront sync operations (`get_config` / `update` / `extract_id` / `extract_sans`) |
-| `dns_sync_total` | Counter | `provider`, `action` | DNS outcomes per name (`created` / `updated` / `unchanged` / `adopted` / `unmanaged_ok` / `conflict` / `skipped_wildcard` / `skipped_target` / `no_zone` / `deleted` / `error`) |
+| `dns_sync_total` | Counter | `provider`, `action` | DNS outcomes per name, except `deferred`, which counts once per reconcile (`created` / `updated` / `unchanged` / `adopted` / `unmanaged_ok` / `conflict` / `skipped_wildcard` / `skipped_target` / `no_zone` / `deleted` / `released` / `deferred` / `error`) |
 | `dns_sync_errors_total` | Counter | `provider`, `error_type` | Failed DNS operations (`sync` / `retryable` / `target` / `extract_sans`) |
 
 ### Kubernetes Events
@@ -525,6 +525,8 @@ The controller emits events on each managed Secret:
 | `DNSRecordCreated` / `DNSRecordUpdated` / `DNSRecordDeleted` / `DNSRecordAdopted` | Normal | DNS record created, updated, removed or adopted |
 | `DNSRecordSkipped` | Normal | Name not managed: wildcard skipped, name equal to the target, no matching zone, no target, or an unowned record already points at the target |
 | `DNSRecordConflict` | Warning | Existing record or owner TXT not ours; left untouched |
+| `DNSRecordReleased` | Warning | Retain policy: a tracked name is no longer requested; its record and owner TXT were left in DNS |
+| `DNSSyncDeferred` | Normal | DNS sync postponed while the Certificate is being issued, not Ready, or its `spec.dnsNames` differ from the Secret's SANs |
 | `DNSSyncFailed` | Warning | DNS provider error (ACM import still succeeded) |
 
 ### Suggested alerts

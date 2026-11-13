@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -88,6 +89,8 @@ func (TLSAnnotatedPredicate) Generic(_ event.GenericEvent) bool { return false }
 // the secondary watch. It passes Creates/Updates only when the Certificate
 // carries acm.sync/enabled="true", and suppresses updates where solely
 // acm.sync/* annotations changed (our own ARN write-back) to prevent loops.
+// Updates where the Ready or Issuing condition changed also pass for
+// DNS-enabled Certificates, so deferred DNS sync resumes once issuance ends.
 type CertificateAnnotatedPredicate struct {
 	predicate.Funcs
 }
@@ -107,7 +110,29 @@ func (CertificateAnnotatedPredicate) Update(e event.UpdateEvent) bool {
 	}
 	oldFiltered := annotations.StripACMAnnotations(e.ObjectOld.GetAnnotations())
 	newFiltered := annotations.StripACMAnnotations(e.ObjectNew.GetAnnotations())
-	return !reflect.DeepEqual(oldFiltered, newFiltered)
+	if !reflect.DeepEqual(oldFiltered, newFiltered) {
+		return true
+	}
+	oldC, okOld := e.ObjectOld.(*unstructured.Unstructured)
+	newC, okNew := e.ObjectNew.(*unstructured.Unstructured)
+	return okOld && okNew && dnsEnabledOnCertificate(newC) && issuanceChanged(oldC, newC)
+}
+
+func dnsEnabledOnCertificate(cert *unstructured.Unstructured) bool {
+	if cert.GetAnnotations()[annotations.DNSEnabled] == "true" {
+		return true
+	}
+	tmpl, _, _ := unstructured.NestedStringMap(cert.Object, "spec", "secretTemplate", "annotations")
+	return tmpl[annotations.DNSEnabled] == "true"
+}
+
+func issuanceChanged(oldC, newC *unstructured.Unstructured) bool {
+	for _, t := range []string{"Ready", "Issuing"} {
+		if certificateCondition(oldC, t) != certificateCondition(newC, t) {
+			return true
+		}
+	}
+	return false
 }
 
 func (CertificateAnnotatedPredicate) Delete(_ event.DeleteEvent) bool   { return false }

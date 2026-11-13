@@ -133,6 +133,11 @@ func (h *dnsHarness) createFresh(t *testing.T, ann map[string]string) {
 
 func (h *dnsHarness) createCert(t *testing.T, ann map[string]string, finalizers ...string) *unstructured.Unstructured {
 	t.Helper()
+	return h.createCertWith(t, ann, []string{dnsHost}, map[string]string{"Ready": "True"}, finalizers...)
+}
+
+func (h *dnsHarness) createCertWith(t *testing.T, ann map[string]string, dnsNames []string, conds map[string]string, finalizers ...string) *unstructured.Unstructured {
+	t.Helper()
 	cert := &unstructured.Unstructured{}
 	cert.SetGroupVersionKind(certGVK)
 	cert.SetName("my-cert")
@@ -140,6 +145,14 @@ func (h *dnsHarness) createCert(t *testing.T, ann map[string]string, finalizers 
 	cert.SetAnnotations(ann)
 	cert.SetFinalizers(finalizers)
 	require.NoError(t, unstructured.SetNestedField(cert.Object, "s", "spec", "secretName"))
+	require.NoError(t, unstructured.SetNestedStringSlice(cert.Object, dnsNames, "spec", "dnsNames"))
+	var list []any
+	for typ, status := range conds {
+		list = append(list, map[string]any{"type": typ, "status": status})
+	}
+	if list != nil {
+		require.NoError(t, unstructured.SetNestedSlice(cert.Object, list, "status", "conditions"))
+	}
 	require.NoError(t, h.r.Create(context.Background(), cert))
 	return cert
 }
@@ -750,4 +763,315 @@ func TestDNS_MissingSecret_ListErrorIsReturned(t *testing.T) {
 	_, err := h.r.Reconcile(context.Background(), nn())
 
 	require.Error(t, err)
+}
+
+func (h *dnsHarness) createStaleSecret(t *testing.T, sans []string, ann map[string]string, owned bool) {
+	t.Helper()
+	certPEM, keyPEM := generateCertWithSANs(t, sans)
+	fp, err := fingerprint.Compute(certPEM)
+	require.NoError(t, err)
+	all := map[string]string{annotations.Enabled: "true", annotations.ARN: dnsARN, annotations.Fingerprint: fp}
+	for k, v := range ann {
+		all[k] = v
+	}
+	secret := tlsSecret(all, certPEM, keyPEM)
+	if owned {
+		secret.OwnerReferences = []metav1.OwnerReference{{APIVersion: "cert-manager.io/v1", Kind: "Certificate", Name: "my-cert"}}
+	}
+	require.NoError(t, h.r.Create(context.Background(), secret))
+}
+
+func (h *dnsHarness) setCommonName(t *testing.T, cn string) {
+	t.Helper()
+	cert, err := h.getCert(t)
+	require.NoError(t, err)
+	require.NoError(t, unstructured.SetNestedField(cert.Object, cn, "spec", "commonName"))
+	require.NoError(t, h.r.Update(context.Background(), cert))
+}
+
+func TestDNS_Deferred(t *testing.T) {
+	tests := []struct {
+		name  string
+		names []string
+		conds map[string]string
+	}{
+		{"SANs differ from spec.dnsNames", []string{dnsHost}, map[string]string{"Ready": "True"}},
+		{"Issuing is True", []string{dnsHost, "stale.example.com"}, map[string]string{"Ready": "True", "Issuing": "True"}},
+		{"Ready is False", []string{dnsHost, "stale.example.com"}, map[string]string{"Ready": "False"}},
+		{"Ready is missing", []string{dnsHost, "stale.example.com"}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newDNSHarness(t, dns.DeleteRetain, false)
+			h.createCertWith(t, map[string]string{annotations.DNSEnabled: "true"}, tt.names, tt.conds)
+			sans := []string{dnsHost, "stale.example.com"}
+			h.createStaleSecret(t, sans, map[string]string{annotations.DNSRecords: dnsHost}, true)
+
+			res, err := h.r.Reconcile(context.Background(), nn())
+			require.NoError(t, err)
+			assert.Equal(t, time.Minute, res.RequeueAfter)
+			h.acm.AssertNotCalled(t, "ImportCertificate")
+			h.provider.AssertNotCalled(t, "GetRecords", mock.Anything, mock.Anything, mock.Anything)
+			h.provider.AssertNotCalled(t, "CreateRecords", mock.Anything, mock.Anything, mock.Anything)
+			h.provider.AssertNotCalled(t, "DeleteRecords", mock.Anything, mock.Anything, mock.Anything)
+			assert.Equal(t, dnsHost, h.getSecret(t).Annotations[annotations.DNSRecords])
+			assert.True(t, hasEvent(h.eventReasons(), "DNSSyncDeferred"))
+		})
+	}
+}
+
+func TestDNS_Deferred_AlsoOnImportPath(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteRetain, false)
+	h.createCertWith(t, map[string]string{annotations.DNSEnabled: "true"}, []string{dnsHost}, map[string]string{"Ready": "True", "Issuing": "True"})
+	certPEM, keyPEM := generateCertWithSANs(t, []string{dnsHost, "stale.example.com"})
+	secret := tlsSecret(map[string]string{annotations.Enabled: "true"}, certPEM, keyPEM)
+	secret.OwnerReferences = []metav1.OwnerReference{{APIVersion: "cert-manager.io/v1", Kind: "Certificate", Name: "my-cert"}}
+	require.NoError(t, h.r.Create(context.Background(), secret))
+
+	res, err := h.r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	assert.Equal(t, time.Minute, res.RequeueAfter)
+	h.acm.AssertCalled(t, "ImportCertificate", mock.Anything, mock.Anything)
+	h.provider.AssertNotCalled(t, "CreateRecords", mock.Anything, mock.Anything, mock.Anything)
+	assert.True(t, hasEvent(h.eventReasons(), "DNSSyncDeferred"))
+}
+
+func TestDNS_StaleCertificateIncident_CreatesNoRecords(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteRetain, false)
+	h.createCertWith(t, map[string]string{annotations.DNSEnabled: "true", annotations.DNSTarget: dnsTarget},
+		[]string{"a.example.com", "b.example.com"}, map[string]string{"Ready": "True"})
+	h.createStaleSecret(t, []string{"a.example.com", "b.example.com", "dead1.example.com", "dead2.example.com"}, nil, true)
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	h.provider.AssertNotCalled(t, "CreateRecords", mock.Anything, mock.Anything, mock.Anything)
+	assert.NotContains(t, h.getSecret(t).Annotations, annotations.DNSRecords)
+}
+
+func TestDNS_MatchingSANsAndReady_SyncsNormalisedNames(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteRetain, false)
+	h.expectFreshName()
+	h.expectCreate(dnsTarget)
+	h.createCertWith(t, map[string]string{annotations.DNSEnabled: "true"}, []string{"APP.Example.com."}, map[string]string{"Ready": "True", "Issuing": "False"})
+	h.createSynced(t, nil, true)
+
+	res, err := h.r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	assert.Equal(t, 6*time.Hour, res.RequeueAfter)
+	h.provider.AssertExpectations(t)
+}
+
+func TestDNS_SecretOnly_NotDeferred(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteRetain, false)
+	h.expectFreshName()
+	h.expectCreate(dnsTarget)
+	h.createSynced(t, map[string]string{annotations.DNSEnabled: "true"}, false)
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	h.provider.AssertExpectations(t)
+	assert.False(t, hasEvent(h.eventReasons(), "DNSSyncDeferred"))
+}
+
+func TestDNS_Disabled_NeverDeferred(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteRetain, false)
+	h.createCertWith(t, nil, []string{"other.example.com"}, map[string]string{"Issuing": "True"})
+	h.createSynced(t, nil, true)
+
+	res, err := h.r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	assert.Equal(t, 6*time.Hour, res.RequeueAfter)
+	assert.False(t, hasEvent(h.eventReasons(), "DNSSyncDeferred"))
+	h.provider.AssertNotCalled(t, "GetRecords", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestDNS_RetainReleasedName_EmitsWarning(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteRetain, false)
+	h.expectFreshName()
+	h.expectCreate(dnsTarget)
+	h.createSynced(t, map[string]string{annotations.DNSEnabled: "true", annotations.DNSRecords: dnsHost + ",gone.example.com"}, false)
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	h.provider.AssertNotCalled(t, "DeleteRecords", mock.Anything, mock.Anything, mock.Anything)
+
+	var released string
+	for _, e := range h.eventReasons() {
+		if strings.Contains(e, "DNSRecordReleased") {
+			released = e
+		}
+	}
+	assert.Contains(t, released, "Warning")
+	assert.Contains(t, released, "gone.example.com")
+	assert.Equal(t, dnsHost, h.getSecret(t).Annotations[annotations.DNSRecords])
+}
+
+func TestDNS_Deferred_WithoutOwnerReference_UsesCertificateNameAnnotation(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteRetain, false)
+	h.createCertWith(t, map[string]string{annotations.DNSEnabled: "true", annotations.DNSTarget: dnsTarget},
+		[]string{"a.example.com", "b.example.com"}, map[string]string{"Ready": "True"})
+	h.createStaleSecret(t, []string{"a.example.com", "b.example.com", "dead1.example.com", "dead2.example.com"},
+		map[string]string{"cert-manager.io/certificate-name": "my-cert", annotations.DNSEnabled: "true", annotations.DNSTarget: dnsTarget}, false)
+
+	res, err := h.r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	assert.Equal(t, time.Minute, res.RequeueAfter)
+	h.provider.AssertNotCalled(t, "CreateRecords", mock.Anything, mock.Anything, mock.Anything)
+	assert.True(t, hasEvent(h.eventReasons(), "DNSSyncDeferred"))
+}
+
+func TestDNS_WithoutOwnerReferenceOrAnnotation_NotDeferred(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteRetain, false)
+	h.expectFreshName()
+	h.expectCreate(dnsTarget)
+	h.createCertWith(t, map[string]string{annotations.DNSEnabled: "true"}, []string{"other.example.com"}, map[string]string{"Issuing": "True"})
+	h.createStaleSecret(t, []string{dnsHost}, map[string]string{annotations.DNSEnabled: "true"}, false)
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	h.provider.AssertExpectations(t)
+	assert.False(t, hasEvent(h.eventReasons(), "DNSSyncDeferred"))
+}
+
+func TestDNS_AnnotatedCertificateMissing_NotDeferred(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteRetain, false)
+	h.expectFreshName()
+	h.expectCreate(dnsTarget)
+	h.createStaleSecret(t, []string{dnsHost}, map[string]string{annotations.DNSEnabled: "true", "cert-manager.io/certificate-name": "gone"}, false)
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	h.provider.AssertExpectations(t)
+}
+
+func TestDNS_CommonNameAcceptedAsSAN(t *testing.T) {
+	const cn = "cn.example.com"
+	tests := []struct {
+		name      string
+		sans      []string
+		wantDefer bool
+	}{
+		{"SANs equal dnsNames", []string{dnsHost}, false},
+		{"SANs equal dnsNames plus commonName", []string{dnsHost, cn}, false},
+		{"SANs have an extra name", []string{dnsHost, cn, "dead.example.com"}, true},
+		{"SANs are a subset", []string{cn}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newDNSHarness(t, dns.DeleteRetain, false)
+			h.provider.On("GetRecords", mock.Anything, dnsZone, mock.Anything).Return(nil, nil).Maybe()
+			h.provider.On("CreateRecords", mock.Anything, dnsZone, mock.Anything).Return(nil).Maybe()
+			h.createCertWith(t, map[string]string{annotations.DNSEnabled: "true"}, []string{dnsHost}, map[string]string{"Ready": "True"})
+			h.setCommonName(t, cn)
+			h.createStaleSecret(t, tt.sans, nil, true)
+
+			_, err := h.r.Reconcile(context.Background(), nn())
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantDefer, hasEvent(h.eventReasons(), "DNSSyncDeferred"))
+			if tt.wantDefer {
+				h.provider.AssertNotCalled(t, "CreateRecords", mock.Anything, mock.Anything, mock.Anything)
+			} else {
+				h.provider.AssertCalled(t, "CreateRecords", mock.Anything, dnsZone, mock.Anything)
+			}
+		})
+	}
+}
+
+func TestDNS_CommonNameOnlyCertificate(t *testing.T) {
+	tests := []struct {
+		name      string
+		cn        string
+		wantDefer bool
+	}{
+		{"matching", "test.local", false},
+		{"differing", "other.example.com", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newDNSHarness(t, dns.DeleteRetain, false)
+			h.createCertWith(t, map[string]string{annotations.DNSEnabled: "true"}, nil, map[string]string{"Ready": "True"})
+			h.setCommonName(t, tt.cn)
+			h.createStaleSecret(t, nil, nil, true)
+
+			res, err := h.r.Reconcile(context.Background(), nn())
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantDefer, hasEvent(h.eventReasons(), "DNSSyncDeferred"))
+			if tt.wantDefer {
+				assert.Equal(t, time.Minute, res.RequeueAfter)
+			} else {
+				assert.Equal(t, 6*time.Hour, res.RequeueAfter)
+			}
+		})
+	}
+}
+
+func TestDNS_Deferred_DeletePolicyKeepsTrackedNames(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteDelete, false)
+	h.createCertWith(t, map[string]string{annotations.DNSEnabled: "true"}, []string{dnsHost, "new.example.com"}, map[string]string{"Ready": "True"})
+	h.createStaleSecret(t, []string{dnsHost}, map[string]string{annotations.DNSRecords: dnsHost + ",gone.example.com"}, true)
+
+	res, err := h.r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	assert.Equal(t, time.Minute, res.RequeueAfter)
+	h.provider.AssertNotCalled(t, "DeleteRecords", mock.Anything, mock.Anything, mock.Anything)
+	assert.Equal(t, dnsHost+",gone.example.com", h.getSecret(t).Annotations[annotations.DNSRecords])
+}
+
+func TestDNS_Cleanup_RunsForDeferrableTerminatingCertificate(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteDelete, false)
+	h.expectOwnedRecord()
+	h.provider.On("DeleteRecords", mock.Anything, dnsZone, mock.Anything).Return(nil).Twice()
+	cert := h.createCertWith(t, map[string]string{annotations.DNSEnabled: "true", annotations.DNSRecords: dnsHost},
+		[]string{"other.example.com"}, map[string]string{"Issuing": "True"}, annotations.DNSCleanupFinalizer)
+	h.createStaleSecret(t, []string{dnsHost}, nil, true)
+	h.deleteCert(t, cert)
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	h.provider.AssertNumberOfCalls(t, "DeleteRecords", 2)
+	_, err = h.getCert(t)
+	assert.True(t, apierrors.IsNotFound(err))
+	assert.False(t, hasEvent(h.eventReasons(), "DNSSyncDeferred"))
+}
+
+func TestDNS_Deferred_ThenResumesWhenCertificateLands(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteRetain, false)
+	h.expectFreshName()
+	h.expectCreate(dnsTarget)
+	h.createCertWith(t, map[string]string{annotations.DNSEnabled: "true"}, []string{dnsHost}, map[string]string{"Ready": "True"})
+	h.createStaleSecret(t, []string{dnsHost, "stale.example.com"}, nil, true)
+
+	res, err := h.r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	assert.Equal(t, time.Minute, res.RequeueAfter)
+	h.provider.AssertNotCalled(t, "CreateRecords", mock.Anything, mock.Anything, mock.Anything)
+
+	certPEM, keyPEM := generateCertWithSANs(t, []string{dnsHost})
+	secret := h.getSecret(t)
+	secret.Data["tls.crt"], secret.Data["tls.key"] = certPEM, keyPEM
+	require.NoError(t, h.r.Update(context.Background(), &secret))
+
+	res, err = h.r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	assert.Equal(t, 6*time.Hour, res.RequeueAfter)
+	h.provider.AssertExpectations(t)
+	assert.Equal(t, dnsHost, h.getSecret(t).Annotations[annotations.DNSRecords])
+}
+
+func TestDNS_Released_NotReemittedOnSecondReconcile(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteRetain, false)
+	h.expectOwnedRecord()
+	h.createSynced(t, map[string]string{annotations.DNSEnabled: "true", annotations.DNSRecords: dnsHost + ",gone.example.com"}, false)
+
+	for range 2 {
+		_, err := h.r.Reconcile(context.Background(), nn())
+		require.NoError(t, err)
+	}
+	released := 0
+	for _, e := range h.eventReasons() {
+		if strings.Contains(e, "DNSRecordReleased") {
+			released++
+		}
+	}
+	assert.Equal(t, 1, released)
 }

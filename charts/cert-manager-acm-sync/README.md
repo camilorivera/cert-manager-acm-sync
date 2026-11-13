@@ -74,7 +74,7 @@ CloudFront sync is **non-fatal**: failure emits a `CloudFrontSyncFailed` warning
 
 The controller can also create the DNS records for a certificate's SANs, so a hostname starts resolving to its CloudFront distribution (or any other target) without a separate DNS step. It is **off by default** and supports one provider per deployment: `route53` or `dnsimple`.
 
-It needs two opt-ins: the controller runs with `--dns-provider` (and `--dns-zones`), and each Secret or Certificate sets `acm.sync/dns-enabled: "true"` (Secret wins over Certificate). DNS sync runs after ACM and CloudFront, and is non-fatal: failures emit a `DNSSyncFailed` event and increment `dns_sync_errors_total`. Any DNS error is retried after 5 minutes.
+It needs two opt-ins: the controller runs with `--dns-provider` (and `--dns-zones`), and each Secret or Certificate sets `acm.sync/dns-enabled: "true"` (Secret wins over Certificate). DNS sync runs after ACM and CloudFront, and is non-fatal: failures emit a `DNSSyncFailed` event and increment `dns_sync_errors_total`. Any DNS error is retried after 5 minutes. While the owning Certificate is being issued, is not Ready, or its `spec.dnsNames` differ from the Secret's certificate SANs, DNS sync is deferred (`DNSSyncDeferred` event, retried after 1 minute) so a certificate that is about to be replaced never creates records for names being removed. With `--dns-delete-policy=retain`, a tracked name that is no longer requested is dropped from `acm.sync/dns-records` and a `DNSRecordReleased` warning reports that its record and owner TXT were left in DNS. The owning Certificate used for deferral is found through the Secret's ownerReference or its `cert-manager.io/certificate-name` annotation.
 
 ### Target
 
@@ -287,5 +287,5 @@ Prometheus metrics exposed on `:8080/metrics`:
 | `acm_sync_last_sync_timestamp` | Gauge | `region`, `secret` | Unix timestamp of last successful sync |
 | `cloudfront_sync_total` | Counter | `action` | CloudFront sync operations (`synced`) |
 | `cloudfront_sync_errors_total` | Counter | `error_type` | Failed CloudFront sync operations (`get_config` / `update` / `extract_id` / `extract_sans`) |
-| `dns_sync_total` | Counter | `provider`, `action` | DNS outcomes per name (`created` / `updated` / `unchanged` / `adopted` / `unmanaged_ok` / `conflict` / `skipped_wildcard` / `no_zone` / `deleted` / `error`) |
+| `dns_sync_total` | Counter | `provider`, `action` | DNS outcomes per name, except `deferred`, which counts once per reconcile (`created` / `updated` / `unchanged` / `adopted` / `unmanaged_ok` / `conflict` / `skipped_wildcard` / `skipped_target` / `no_zone` / `deleted` / `released` / `deferred` / `error`) |
 | `dns_sync_errors_total` | Counter | `provider`, `error_type` | Failed DNS operations (`sync` / `retryable` / `target` / `extract_sans`) |
