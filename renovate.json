@@ -10,6 +10,12 @@
       "matchManagers": ["gomod"],
       "matchDepTypes": ["indirect"],
       "enabled": true
+    },
+    {
+      "description": "Pinned by k8s.io/apimachinery; moves with k8s.io bumps",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["k8s.io/kube-openapi", "sigs.k8s.io/structured-merge-diff/**"],
+      "enabled": false
     }
   ],
   "postUpdateOptions": ["gomodTidy"]
