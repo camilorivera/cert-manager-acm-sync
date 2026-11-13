@@ -239,11 +239,9 @@ func dnsDeferReason(cert *unstructured.Unstructured, sans []string) string {
 	return "certificate SANs differ from spec.dnsNames"
 }
 
-// maybeSyncDNS reconciles DNS records for the Secret's SANs. It returns how
-// long to wait before retrying, or 0 for no retry. Failures are never fatal.
 // deferCertificate returns the Certificate whose issuance state gates DNS sync:
 // the owner, else the one named by the cert-manager.io/certificate-name
-// annotation. nil means no gating.
+// annotation when it targets this Secret. nil means no gating.
 func (r *SecretReconciler) deferCertificate(ctx context.Context, secret *corev1.Secret, certOwner *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	if certOwner != nil {
 		return certOwner, nil
@@ -259,6 +257,9 @@ func (r *SecretReconciler) deferCertificate(ctx context.Context, secret *corev1.
 			return nil, nil
 		}
 		return nil, err
+	}
+	if target, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName"); target != secret.Name {
+		return nil, nil
 	}
 	return cert, nil
 }

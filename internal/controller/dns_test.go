@@ -1075,3 +1075,32 @@ func TestDNS_Released_NotReemittedOnSecondReconcile(t *testing.T) {
 	}
 	assert.Equal(t, 1, released)
 }
+
+func TestDNS_AnnotatedCertificateForOtherSecret_NotDeferred(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteRetain, false)
+	h.expectFreshName()
+	h.expectCreate(dnsTarget)
+	h.createCertWith(t, map[string]string{annotations.DNSEnabled: "true"}, []string{"other.example.com"}, map[string]string{"Issuing": "True"})
+	cert, err := h.getCert(t)
+	require.NoError(t, err)
+	require.NoError(t, unstructured.SetNestedField(cert.Object, "other-secret", "spec", "secretName"))
+	require.NoError(t, h.r.Update(context.Background(), cert))
+	h.createStaleSecret(t, []string{dnsHost}, map[string]string{annotations.DNSEnabled: "true", "cert-manager.io/certificate-name": "my-cert"}, false)
+
+	_, err = h.r.Reconcile(context.Background(), nn())
+	require.NoError(t, err)
+	h.provider.AssertExpectations(t)
+	assert.False(t, hasEvent(h.eventReasons(), "DNSSyncDeferred"))
+}
+
+func TestDNS_AnnotatedCertificateLookupError_ReturnsErrorWithoutSync(t *testing.T) {
+	h := newDNSHarness(t, dns.DeleteRetain, false)
+	h.createStaleSecret(t, []string{dnsHost}, map[string]string{annotations.DNSEnabled: "true", "cert-manager.io/certificate-name": "my-cert"}, false)
+	h.r.Reader = failingGetReader{Reader: h.r.Reader, err: errors.New("apiserver down")}
+
+	_, err := h.r.Reconcile(context.Background(), nn())
+
+	require.Error(t, err)
+	h.provider.AssertNotCalled(t, "GetRecords", mock.Anything, mock.Anything, mock.Anything)
+	h.provider.AssertNotCalled(t, "CreateRecords", mock.Anything, mock.Anything, mock.Anything)
+}
